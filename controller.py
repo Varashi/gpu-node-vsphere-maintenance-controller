@@ -436,12 +436,20 @@ class MaintenanceController:
                     f"({int(elapsed)}s / {DRAIN_TIMEOUT}s)"
                 )
 
-    def reconcile_powered_off(self):
-        """Uncordon powered-off nodes once they're back Ready."""
+    def reconcile_powered_off(self, host_states: dict):
+        """Uncordon powered-off nodes once their host has exited maintenance and they're back Ready."""
         for node in self.k8s.get_gpu_nodes():
             name = node.metadata.name
             annotations = node.metadata.annotations or {}
             if annotations.get(ANNOTATION_STATE) != STATE_POWERED_OFF:
+                continue
+
+            host = annotations.get(ANNOTATION_HOST)
+            h = host_states.get(host, {})
+
+            if h.get("in_maintenance") or h.get("entering_maintenance"):
+                # Host still in/entering maintenance — VM is intentionally off, nothing to do
+                log.info(f"Node {name} powered off, host {host} still in maintenance")
                 continue
 
             if self.k8s.is_ready(name):
@@ -502,7 +510,7 @@ class MaintenanceController:
                     self.last_host_state[host_name] = state
 
                 self.reconcile_draining()
-                self.reconcile_powered_off()
+                self.reconcile_powered_off(host_states)
 
             except Exception:
                 log.exception("Unhandled error in reconcile loop")
