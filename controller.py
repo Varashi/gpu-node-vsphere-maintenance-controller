@@ -4,7 +4,10 @@ VSphere Maintenance Mode Controller
 
 Watches ESXi hosts for maintenance mode transitions and automatically:
 - Cordon + drain + power off GPU worker nodes when their host enters maintenance
-- Power on + wait for Ready + uncordon when their host exits maintenance
+- If a free GPU-capable host is available, migrate the VM there and power it on:
+    * DRS full automation: power on directly, DRS selects placement host
+    * No DRS: cold migrate (RelocateVM) to a free GPU host, then power on
+- Otherwise wait for the host to exit maintenance, then power on + uncordon
 
 GPU nodes are identified by label: intel.feature.node.kubernetes.io/gpu=true
 VM name in vSphere matches K8s node name exactly.
@@ -43,9 +46,11 @@ DRY_RUN = os.environ.get("DRY_RUN", "false").lower() == "true"
 ANNOTATION_STATE = "vsphere-maintenance.boeye.net/state"
 ANNOTATION_HOST = "vsphere-maintenance.boeye.net/host"
 ANNOTATION_TIME = "vsphere-maintenance.boeye.net/transition-time"
+ANNOTATION_MIGRATED_HOST = "vsphere-maintenance.boeye.net/migrated-to-host"
 
 STATE_DRAINING = "draining"
 STATE_POWERED_OFF = "powered-off"
+STATE_MIGRATED = "migrated"
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -124,6 +129,101 @@ class VSphereClient:
                 return names
         view.Destroy()
         return []
+
+    def is_drs_fully_automated(self, host_name: str) -> bool:
+        """
+        Returns True if the host belongs to a vSphere cluster with DRS enabled
+        in fully automated mode. Returns False for standalone hosts or manual/partial DRS.
+        When True, PowerOn requests are handled by DRS for initial placement,
+        so explicit relocation before power-on is unnecessary.
+        """
+        self._ensure_connected()
+        view = self._container(vim.HostSystem)
+        result = False
+        for host in view.view:
+            if host.name == host_name:
+                if isinstance(host.parent, vim.ClusterComputeResource):
+                    drs = host.parent.configuration.drsConfig
+                    result = (
+                        drs.enabled
+                        and drs.defaultVmBehavior
+                        == vim.cluster.DrsConfigInfo.DrsBehavior.fullyAutomated
+                    )
+                break
+        view.Destroy()
+        return result
+
+    def find_free_gpu_host(
+        self, gpu_node_names: set, host_states: dict, exclude_host: str
+    ):
+        """
+        Find an ESXi host that:
+        - Has PCI passthrough enabled (indicates GPU-capable hardware)
+        - Is not in or entering maintenance mode
+        - Is not the excluded host
+        - Has none of the known GPU worker VMs on it (free GPU slot)
+
+        Used as fallback when DRS is not in full automation mode.
+        Returns host name, or None if no suitable host is found.
+        """
+        self._ensure_connected()
+        view = self._container(vim.HostSystem)
+        result = None
+        for host in view.view:
+            if host.name == exclude_host:
+                continue
+            h = host_states.get(host.name, {})
+            if h.get("in_maintenance") or h.get("entering_maintenance"):
+                continue
+            # Only consider hosts with PCI passthrough capability (GPU hosts)
+            has_passthrough = (
+                host.config
+                and host.config.pciPassthruInfo
+                and any(p.passthruEnabled for p in host.config.pciPassthruInfo)
+            )
+            if not has_passthrough:
+                continue
+            # Skip hosts that already have a GPU worker VM
+            vms_on_host = {vm.name for vm in host.vm}
+            if vms_on_host.isdisjoint(gpu_node_names):
+                result = host.name
+                break
+        view.Destroy()
+        return result
+
+    def get_vm_host(self, vm_name: str):
+        """Returns the name of the ESXi host the VM is currently on, or None."""
+        self._ensure_connected()
+        vm = self._find_vm(vm_name)
+        if vm and vm.runtime.host:
+            return vm.runtime.host.name
+        return None
+
+    def relocate_vm(self, vm_name: str, target_host_name: str):
+        """Cold migrate a powered-off VM to the target ESXi host."""
+        self._ensure_connected()
+        vm = self._find_vm(vm_name)
+        if vm is None:
+            raise RuntimeError(f"VM {vm_name} not found")
+
+        view = self._container(vim.HostSystem)
+        target_host = None
+        for host in view.view:
+            if host.name == target_host_name:
+                target_host = host
+                break
+        view.Destroy()
+
+        if target_host is None:
+            raise RuntimeError(f"Target host {target_host_name} not found")
+
+        spec = vim.vm.RelocateSpec()
+        spec.host = target_host
+        spec.pool = target_host.parent.resourcePool
+
+        log.info(f"Cold migrating {vm_name} to {target_host_name}")
+        self._wait_task(vm.Relocate(spec), timeout=600)
+        log.info(f"Cold migration of {vm_name} to {target_host_name} complete")
 
     def power_off_vm(self, vm_name):
         self._ensure_connected()
@@ -280,7 +380,7 @@ class MaintenanceController:
         count = 0
         for node in self.k8s.get_gpu_nodes():
             state = (node.metadata.annotations or {}).get(ANNOTATION_STATE)
-            if state in (STATE_DRAINING, STATE_POWERED_OFF):
+            if state in (STATE_DRAINING, STATE_POWERED_OFF, STATE_MIGRATED):
                 count += 1
         return count
 
@@ -318,6 +418,14 @@ class MaintenanceController:
                         f"triggering power-on for {name}"
                     )
                     self.vsphere.power_on_vm(name)
+
+            elif state == STATE_MIGRATED:
+                migrated_to = annotations.get(ANNOTATION_MIGRATED_HOST, "unknown")
+                log.info(
+                    f"Resuming wait for {name} to be Ready "
+                    f"(migrated to {migrated_to})"
+                )
+                # reconcile_migrated will handle uncordoning once Ready
 
         # Start fresh drains for hosts already entering/in maintenance with no annotation yet
         gpu_nodes = self.gpu_node_names()
@@ -385,14 +493,95 @@ class MaintenanceController:
         for node in self.k8s.get_gpu_nodes():
             name = node.metadata.name
             annotations = node.metadata.annotations or {}
-            if (annotations.get(ANNOTATION_STATE) == STATE_POWERED_OFF
-                    and annotations.get(ANNOTATION_HOST) == host_name):
+            state = annotations.get(ANNOTATION_STATE)
+
+            if state == STATE_POWERED_OFF and annotations.get(ANNOTATION_HOST) == host_name:
                 log.info(f"Powering on VM {name}")
                 self.vsphere.power_on_vm(name)
+            # STATE_MIGRATED nodes are already powered on elsewhere — nothing to do
+
+    # ── Migration ─────────────────────────────────────────────────────────────
+
+    def _try_migrate(self, node_name: str, original_host: str, host_states: dict):
+        """
+        After a VM is powered off, attempt to start it on a different host so it
+        becomes available without waiting for the original host to exit maintenance.
+
+        Strategy:
+        1. DRS fully automated: power on directly — DRS selects a compatible host
+           (respects maintenance mode and PCI passthrough hardware requirements).
+        2. No DRS: find a free GPU-capable host manually and cold migrate there first.
+
+        Returns the host name the VM was migrated to, or None if migration was not
+        possible or not attempted (caller keeps state as STATE_POWERED_OFF).
+        """
+        if DRY_RUN:
+            if self.vsphere.is_drs_fully_automated(original_host):
+                log.info(
+                    f"[DRY RUN] DRS fully automated — would power on {node_name} "
+                    f"and let DRS select placement host"
+                )
+            else:
+                gpu_nodes = self.gpu_node_names()
+                free_host = self.vsphere.find_free_gpu_host(
+                    gpu_nodes, host_states, original_host
+                )
+                if free_host:
+                    log.info(
+                        f"[DRY RUN] Would cold migrate {node_name} to {free_host} "
+                        f"and power on"
+                    )
+                else:
+                    log.info(
+                        f"[DRY RUN] No free GPU host available for {node_name} — "
+                        f"would wait for {original_host} to exit maintenance"
+                    )
+            return None
+
+        # DRS path: let vSphere handle initial placement
+        if self.vsphere.is_drs_fully_automated(original_host):
+            log.info(
+                f"Cluster DRS is fully automated — powering on {node_name}, "
+                f"DRS will select placement host"
+            )
+            try:
+                self.vsphere.power_on_vm(node_name)
+                actual_host = self.vsphere.get_vm_host(node_name) or "drs-managed"
+                log.info(f"DRS placed {node_name} on {actual_host}")
+                return actual_host
+            except Exception:
+                log.exception(
+                    f"DRS-managed power-on of {node_name} failed — "
+                    f"will wait for {original_host} to exit maintenance"
+                )
+                return None
+
+        # Non-DRS path: find a free GPU host and cold migrate
+        gpu_nodes = self.gpu_node_names()
+        free_host = self.vsphere.find_free_gpu_host(gpu_nodes, host_states, original_host)
+
+        if free_host is None:
+            log.info(
+                f"No free GPU host available for {node_name} — "
+                f"will wait for {original_host} to exit maintenance"
+            )
+            return None
+
+        log.info(f"Free GPU host found: {free_host} — cold migrating {node_name}")
+        try:
+            self.vsphere.relocate_vm(node_name, free_host)
+            self.vsphere.power_on_vm(node_name)
+            return free_host
+        except Exception:
+            log.exception(
+                f"Migration of {node_name} to {free_host} failed — "
+                f"will wait for {original_host} to exit maintenance"
+            )
+            return None
 
     # ── Ongoing reconciliation ────────────────────────────────────────────────
 
-    def reconcile_draining(self):
+    def reconcile_draining(self, host_states: dict):
         """Advance draining nodes: evict remaining pods, power off when clear."""
         for node in self.k8s.get_gpu_nodes():
             name = node.metadata.name
@@ -403,28 +592,35 @@ class MaintenanceController:
             remaining = self.k8s.get_evictable_pods(name)
             elapsed = time.time() - self.drain_started_at.get(name, time.time())
 
-            if not remaining:
-                log.info(f"Node {name} fully drained after {int(elapsed)}s — powering off VM")
+            if not remaining or elapsed > DRAIN_TIMEOUT:
+                if not remaining:
+                    log.info(
+                        f"Node {name} fully drained after {int(elapsed)}s — powering off VM"
+                    )
+                else:
+                    log.warning(
+                        f"Drain timeout ({DRAIN_TIMEOUT}s) exceeded for {name} — "
+                        f"forcing power off with {len(remaining)} pod(s) remaining"
+                    )
                 self.vsphere.power_off_vm(name)
-                self.k8s.patch_node_annotations(name, {
-                    ANNOTATION_STATE: STATE_POWERED_OFF,
-                    ANNOTATION_HOST: annotations.get(ANNOTATION_HOST),
-                    ANNOTATION_TIME: self.now_iso(),
-                })
                 self.drain_started_at.pop(name, None)
 
-            elif elapsed > DRAIN_TIMEOUT:
-                log.warning(
-                    f"Drain timeout ({DRAIN_TIMEOUT}s) exceeded for {name} — "
-                    f"forcing power off with {len(remaining)} pod(s) remaining"
-                )
-                self.vsphere.power_off_vm(name)
-                self.k8s.patch_node_annotations(name, {
-                    ANNOTATION_STATE: STATE_POWERED_OFF,
-                    ANNOTATION_HOST: annotations.get(ANNOTATION_HOST),
-                    ANNOTATION_TIME: self.now_iso(),
-                })
-                self.drain_started_at.pop(name, None)
+                original_host = annotations.get(ANNOTATION_HOST)
+                migrated_to = self._try_migrate(name, original_host, host_states)
+
+                if migrated_to:
+                    self.k8s.patch_node_annotations(name, {
+                        ANNOTATION_STATE: STATE_MIGRATED,
+                        ANNOTATION_HOST: original_host,
+                        ANNOTATION_MIGRATED_HOST: migrated_to,
+                        ANNOTATION_TIME: self.now_iso(),
+                    })
+                else:
+                    self.k8s.patch_node_annotations(name, {
+                        ANNOTATION_STATE: STATE_POWERED_OFF,
+                        ANNOTATION_HOST: original_host,
+                        ANNOTATION_TIME: self.now_iso(),
+                    })
 
             else:
                 # Re-evict pods that haven't terminated yet (handles PDB retries)
@@ -462,6 +658,30 @@ class MaintenanceController:
                 })
             else:
                 log.info(f"Node {name} not yet Ready, waiting...")
+
+    def reconcile_migrated(self):
+        """Uncordon migrated nodes once they're back Ready on their new host."""
+        for node in self.k8s.get_gpu_nodes():
+            name = node.metadata.name
+            annotations = node.metadata.annotations or {}
+            if annotations.get(ANNOTATION_STATE) != STATE_MIGRATED:
+                continue
+
+            migrated_to = annotations.get(ANNOTATION_MIGRATED_HOST, "unknown")
+
+            if self.k8s.is_ready(name):
+                log.info(f"Node {name} is Ready on {migrated_to} — uncordoning")
+                self.k8s.uncordon(name)
+                self.k8s.patch_node_annotations(name, {
+                    ANNOTATION_STATE: None,
+                    ANNOTATION_HOST: None,
+                    ANNOTATION_MIGRATED_HOST: None,
+                    ANNOTATION_TIME: None,
+                })
+            else:
+                log.info(
+                    f"Node {name} migrated to {migrated_to}, not yet Ready, waiting..."
+                )
 
     # ── Main loop ─────────────────────────────────────────────────────────────
 
@@ -509,8 +729,9 @@ class MaintenanceController:
 
                     self.last_host_state[host_name] = state
 
-                self.reconcile_draining()
+                self.reconcile_draining(host_states)
                 self.reconcile_powered_off(host_states)
+                self.reconcile_migrated()
 
             except Exception:
                 log.exception("Unhandled error in reconcile loop")
