@@ -253,7 +253,30 @@ class VSphereClient:
             log.info(f"[DRY RUN] Would power on VM {vm_name}")
             return
         log.info(f"Powering on VM {vm_name}")
-        self._wait_task(vm.PowerOn())
+        try:
+            self._wait_task(vm.PowerOn())
+        except RuntimeError as e:
+            if "Powered on" not in str(e):
+                raise
+            # VM was powered on concurrently (e.g., by DRS or Rancher).
+            # Verify it landed on a host that is not in/entering maintenance.
+            current_host = vm.runtime.host
+            if current_host is None:
+                raise RuntimeError(f"VM {vm_name} is powered on but host is unknown")
+            host_entering = any(
+                t.info.descriptionId == "HostSystem.enterMaintenanceMode"
+                and t.info.state == "running"
+                for t in current_host.recentTask
+            )
+            if current_host.runtime.inMaintenanceMode or host_entering:
+                raise RuntimeError(
+                    f"VM {vm_name} is already powered on but on a host in/entering "
+                    f"maintenance mode ({current_host.name}) — cannot use"
+                )
+            log.info(
+                f"VM {vm_name} already powered on on {current_host.name} "
+                f"(concurrent power-on) — treating as success"
+            )
 
     def _find_vm(self, vm_name):
         view = self._container(vim.VirtualMachine)
@@ -644,8 +667,25 @@ class MaintenanceController:
             h = host_states.get(host, {})
 
             if h.get("in_maintenance") or h.get("entering_maintenance"):
-                # Host still in/entering maintenance — VM is intentionally off, nothing to do
-                log.info(f"Node {name} powered off, host {host} still in maintenance")
+                # Host still in/entering maintenance — check if VM was already placed
+                # on a different host (e.g., by DRS or Rancher in a previous cycle)
+                actual_host = self.vsphere.get_vm_host(name)
+                ah = host_states.get(actual_host, {}) if actual_host else {}
+                if (actual_host and actual_host != host
+                        and not ah.get("in_maintenance")
+                        and not ah.get("entering_maintenance")):
+                    log.info(
+                        f"VM {name} already running on {actual_host} — "
+                        f"transitioning to migrated state"
+                    )
+                    self.k8s.patch_node_annotations(name, {
+                        ANNOTATION_STATE: STATE_MIGRATED,
+                        ANNOTATION_HOST: host,
+                        ANNOTATION_MIGRATED_HOST: actual_host,
+                        ANNOTATION_TIME: self.now_iso(),
+                    })
+                else:
+                    log.info(f"Node {name} powered off, host {host} still in maintenance")
                 continue
 
             if self.k8s.is_ready(name):
