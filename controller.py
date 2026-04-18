@@ -22,11 +22,28 @@ import sys
 import time
 from datetime import datetime, timezone
 
+import urllib3.exceptions
 from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
 from kubernetes.client.rest import ApiException
 from pyVim.connect import Disconnect, SmartConnect
 from pyVmomi import vim
+
+TRANSIENT_K8S_API_CODES = {408, 429, 500, 502, 503, 504}
+TRANSIENT_TRANSPORT_EXC = (
+    urllib3.exceptions.ProtocolError,
+    urllib3.exceptions.ReadTimeoutError,
+    urllib3.exceptions.MaxRetryError,
+    urllib3.exceptions.ConnectionError,
+    ConnectionError,
+    TimeoutError,
+)
+
+
+def _is_transient_k8s_error(exc: BaseException) -> bool:
+    if isinstance(exc, ApiException) and exc.status in TRANSIENT_K8S_API_CODES:
+        return True
+    return isinstance(exc, TRANSIENT_TRANSPORT_EXC)
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
@@ -773,8 +790,17 @@ class MaintenanceController:
                 self.reconcile_powered_off(host_states)
                 self.reconcile_migrated()
 
-            except Exception:
-                log.exception("Unhandled error in reconcile loop")
+            except Exception as e:
+                if _is_transient_k8s_error(e):
+                    status = getattr(e, "status", None)
+                    reason = getattr(e, "reason", type(e).__name__)
+                    detail = f" status={status}" if status else ""
+                    log.warning(
+                        f"Transient k8s/transport error in reconcile loop: "
+                        f"{reason}{detail} — retrying next poll"
+                    )
+                else:
+                    log.exception("Unhandled error in reconcile loop")
 
             time.sleep(POLL_INTERVAL)
 
