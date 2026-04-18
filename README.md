@@ -188,7 +188,7 @@ spec:
       serviceAccountName: gpu-node-vsphere-maintenance
       containers:
         - name: controller
-          image: ghcr.io/varashi/gpu-node-vsphere-maintenance-controller:v0.2.1
+          image: ghcr.io/varashi/gpu-node-vsphere-maintenance-controller:v0.2.3
           envFrom:
             - secretRef:
                 name: vsphere-credentials
@@ -307,6 +307,11 @@ Kubernetes Python client.
 
 ## Version history
 
+- **v0.2.3** — reconcile loop classifies transient kube-apiserver
+  errors (408/429/5xx) and urllib3 transport blips as WARNING instead
+  of ERROR+traceback; genuine exceptions still get the full traceback.
+- **v0.2.2** — no code change; added OCI image labels after extraction
+  to a dedicated GitHub repo.
 - **v0.2.1** — concurrent-power-on race handled; stale `powered-off`
   recovery.
 - **v0.2.0** — cold-migrate to a free GPU host after power-off (DRS auto
