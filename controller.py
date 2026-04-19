@@ -56,6 +56,7 @@ GPU_NODE_LABEL = os.environ.get(
 )
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL_SECONDS", "30"))
 DRAIN_TIMEOUT = int(os.environ.get("DRAIN_TIMEOUT_SECONDS", "600"))
+GUEST_SHUTDOWN_TIMEOUT = int(os.environ.get("GUEST_SHUTDOWN_TIMEOUT_SECONDS", "120"))
 POWER_ON_TIMEOUT = int(os.environ.get("POWER_ON_TIMEOUT_SECONDS", "300"))
 MAX_CONCURRENT_DRAINS = int(os.environ.get("MAX_CONCURRENT_DRAINS", "1"))
 DRY_RUN = os.environ.get("DRY_RUN", "false").lower() == "true"
@@ -254,7 +255,39 @@ class VSphereClient:
         if DRY_RUN:
             log.info(f"[DRY RUN] Would power off VM {vm_name}")
             return
-        log.info(f"Powering off VM {vm_name}")
+
+        # Try guest shutdown first (requires VMware Tools); fall back to hard
+        # PowerOff after GUEST_SHUTDOWN_TIMEOUT or if Tools is unavailable.
+        try:
+            log.info(
+                f"Requesting guest shutdown of VM {vm_name} "
+                f"(timeout {GUEST_SHUTDOWN_TIMEOUT}s before hard power-off)"
+            )
+            vm.ShutdownGuest()
+        except vim.fault.ToolsUnavailable:
+            log.warning(
+                f"VMware Tools unavailable on {vm_name} — hard powering off"
+            )
+            self._wait_task(vm.PowerOff())
+            return
+        except vim.fault.VimFault as e:
+            log.warning(
+                f"ShutdownGuest on {vm_name} rejected ({e.msg}) — hard powering off"
+            )
+            self._wait_task(vm.PowerOff())
+            return
+
+        deadline = time.time() + GUEST_SHUTDOWN_TIMEOUT
+        while time.time() < deadline:
+            if vm.runtime.powerState == vim.VirtualMachinePowerState.poweredOff:
+                log.info(f"VM {vm_name} guest-shutdown complete")
+                return
+            time.sleep(5)
+
+        log.warning(
+            f"Guest shutdown of {vm_name} did not complete in "
+            f"{GUEST_SHUTDOWN_TIMEOUT}s — hard powering off"
+        )
         self._wait_task(vm.PowerOff())
 
     def power_on_vm(self, vm_name):
@@ -589,9 +622,16 @@ class MaintenanceController:
                 actual_host = self.vsphere.get_vm_host(node_name) or "drs-managed"
                 log.info(f"DRS placed {node_name} on {actual_host}")
                 return actual_host
+            except (RuntimeError, vim.fault.VimFault) as e:
+                msg = getattr(e, "msg", str(e))
+                log.warning(
+                    f"DRS-managed power-on of {node_name} failed ({msg}) — "
+                    f"will wait for {original_host} to exit maintenance"
+                )
+                return None
             except Exception:
                 log.exception(
-                    f"DRS-managed power-on of {node_name} failed — "
+                    f"Unexpected error during DRS power-on of {node_name} — "
                     f"will wait for {original_host} to exit maintenance"
                 )
                 return None
@@ -612,9 +652,16 @@ class MaintenanceController:
             self.vsphere.relocate_vm(node_name, free_host)
             self.vsphere.power_on_vm(node_name)
             return free_host
+        except (RuntimeError, vim.fault.VimFault) as e:
+            msg = getattr(e, "msg", str(e))
+            log.warning(
+                f"Migration of {node_name} to {free_host} failed ({msg}) — "
+                f"will wait for {original_host} to exit maintenance"
+            )
+            return None
         except Exception:
             log.exception(
-                f"Migration of {node_name} to {free_host} failed — "
+                f"Unexpected error migrating {node_name} to {free_host} — "
                 f"will wait for {original_host} to exit maintenance"
             )
             return None
@@ -748,6 +795,7 @@ class MaintenanceController:
         log.info(
             f"Controller started — poll={POLL_INTERVAL}s, "
             f"drain_timeout={DRAIN_TIMEOUT}s, "
+            f"guest_shutdown_timeout={GUEST_SHUTDOWN_TIMEOUT}s, "
             f"max_concurrent_drains={MAX_CONCURRENT_DRAINS}, "
             f"dry_run={DRY_RUN}"
         )

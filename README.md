@@ -165,6 +165,7 @@ metadata:
 data:
   POLL_INTERVAL_SECONDS: "30"
   DRAIN_TIMEOUT_SECONDS: "600"
+  GUEST_SHUTDOWN_TIMEOUT_SECONDS: "120"
   POWER_ON_TIMEOUT_SECONDS: "300"
   MAX_CONCURRENT_DRAINS: "1"
   GPU_NODE_LABEL: "intel.feature.node.kubernetes.io/gpu=true"
@@ -188,7 +189,7 @@ spec:
       serviceAccountName: gpu-node-vsphere-maintenance
       containers:
         - name: controller
-          image: ghcr.io/varashi/gpu-node-vsphere-maintenance-controller:v0.2.3
+          image: ghcr.io/varashi/gpu-node-vsphere-maintenance-controller:v0.3.0
           envFrom:
             - secretRef:
                 name: vsphere-credentials
@@ -262,6 +263,7 @@ spec:
 | `GPU_NODE_LABEL`            | `intel.feature.node.kubernetes.io/gpu=true` | Node label selector (`key=value`) identifying GPU workers                     |
 | `POLL_INTERVAL_SECONDS`     | `30`                                        | How often to poll vSphere for host state changes                              |
 | `DRAIN_TIMEOUT_SECONDS`     | `600`                                       | Max time to wait for a drain to finish before forcing power-off               |
+| `GUEST_SHUTDOWN_TIMEOUT_SECONDS` | `120`                                  | Max time to wait for guest OS shutdown (via VMware Tools) before hard power-off |
 | `POWER_ON_TIMEOUT_SECONDS`  | `300`                                       | Max time to wait for a powered-on VM's Node to become *Ready*                 |
 | `MAX_CONCURRENT_DRAINS`     | `1`                                         | Upper bound on simultaneous drain operations                                  |
 | `DRY_RUN`                   | `false`                                     | If `true`, log actions without executing vSphere / Kubernetes mutations       |
@@ -307,6 +309,12 @@ Kubernetes Python client.
 
 ## Version history
 
+- **v0.3.0** — graceful guest shutdown via VMware Tools before hard
+  power-off (`GUEST_SHUTDOWN_TIMEOUT_SECONDS`, default `120`); falls
+  back to `PowerOff()` on Tools-unavailable, VimFault, or timeout.
+  `_try_migrate` now logs expected vSphere failures (no compatible
+  host, insufficient resources, etc.) as one-line WARNINGs instead of
+  full ERROR+traceback; genuine bugs still get the traceback.
 - **v0.2.3** — reconcile loop classifies transient kube-apiserver
   errors (408/429/5xx) and urllib3 transport blips as WARNING instead
   of ERROR+traceback; genuine exceptions still get the full traceback.
