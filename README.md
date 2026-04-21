@@ -108,7 +108,7 @@ The chart is published as an OCI artifact alongside the image:
 ```bash
 helm upgrade --install gpu-node-vsphere-maintenance \
   oci://ghcr.io/varashi/charts/gpu-node-vsphere-maintenance-controller \
-  --version 0.4.2 \
+  --version 0.4.3 \
   --namespace gpu-node-vsphere-maintenance --create-namespace \
   --set vcenter.host=vcenter.example.com \
   --set vcenter.user=maintenance-controller@vsphere.local \
@@ -133,7 +133,7 @@ spec:
   interval: 1h
   url: oci://ghcr.io/varashi/charts/gpu-node-vsphere-maintenance-controller
   ref:
-    tag: 0.4.2
+    tag: 0.4.3
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease

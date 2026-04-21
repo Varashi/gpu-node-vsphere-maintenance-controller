@@ -7,6 +7,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.4.3] — 2026-04-21
+
+Docs / CI follow-up from post-v0.4.2 review. No controller code change.
+
 ### Changed
 - README no longer suggests `helm pull --verify`. The flag looks for a
   PGP `.prov` file produced by `helm package --sign`, but the release
@@ -148,7 +152,8 @@ No controller code change. Supply-chain and CI polish only.
 - Initial release: drain → power-off → wait-for-exit → power-on →
   uncordon, driven by edge-triggered `HostSystem.recentTask` polling.
 
-[Unreleased]: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/compare/v0.3.0...v0.4.0
