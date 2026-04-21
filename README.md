@@ -436,20 +436,20 @@ gh attestation verify \
   --owner Varashi
 ```
 
-Verify the Helm chart the same way — the release workflow signs chart
-digests too:
+Verify the Helm chart the same way — the release workflow cosign-signs
+chart digests too:
 
 ```bash
 cosign verify \
   --certificate-identity-regexp 'https://github\.com/Varashi/gpu-node-vsphere-maintenance-controller/\.github/workflows/release\.yaml@refs/tags/v.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/varashi/charts/gpu-node-vsphere-maintenance-controller:<tag>
-
-# Or pull + verify in one shot (requires helm 3.8+ experimental OCI).
-helm pull \
-  oci://ghcr.io/varashi/charts/gpu-node-vsphere-maintenance-controller \
-  --version <tag> --verify
 ```
+
+`helm pull --verify` is *not* supported against this chart: `--verify`
+looks for a PGP `.prov` file (produced by `helm package --sign`), which
+is a separate signing mechanism from cosign keyless. Use `cosign verify`
+above instead.
 
 ## Version history
 

@@ -7,6 +7,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Changed
+- README no longer suggests `helm pull --verify`. The flag looks for a
+  PGP `.prov` file produced by `helm package --sign`, but the release
+  workflow signs with cosign keyless — a different mechanism. Verify
+  charts with `cosign verify` instead.
+- CI `chart` job: drop `fetch-depth: 0` on checkout. `ct lint --all`
+  does not use git history to pick charts, so the shallow default
+  suffices and saves clone time.
+
 ## [0.4.2] — 2026-04-21
 
 No controller code change. Supply-chain and CI polish only.
