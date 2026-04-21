@@ -6,8 +6,8 @@ description: |
   on ESXi hosts, drains the matching Kubernetes nodes, powers off the VMs,
   migrates them to a free GPU host if possible, and returns them to service.
 type: application
-version: 0.4.1
-appVersion: "0.4.1"
+version: 0.4.2
+appVersion: "0.4.2"
 kubeVersion: ">=1.26.0-0"
 keywords:
   - vsphere
@@ -25,5 +25,7 @@ maintainers:
 annotations:
   artifacthub.io/license: MIT
   artifacthub.io/changes: |
-    - kind: added
-      description: VCENTER_TLS_VERIFY / vcenter.tlsVerify for public-CA vCenter certs.
+    - kind: changed
+      description: Release workflow now cosign-signs the chart OCI digest too.
+    - kind: changed
+      description: Supply-chain polish — single SBOM source, sign digest once, ct lint in CI.
