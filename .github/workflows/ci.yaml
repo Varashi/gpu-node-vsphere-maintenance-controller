@@ -39,6 +39,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: azure/setup-helm@v4
         with:
           version: v3.16.3
@@ -53,6 +55,14 @@ jobs:
           helm template ci chart/ \
             --set vcenter.existingSecret=my-eso-secret \
             --set vcenter.caBundle.configMapName=vcenter-ca > /dev/null
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: helm/chart-testing-action@v2
+      - name: ct lint
+        # Catches SemVer/maintainer/icon/README drift that plain `helm lint`
+        # misses. `--all` since this repo has a single chart in chart/.
+        run: ct lint --all --chart-dirs . --validate-maintainers=false
 
   image:
     name: image / buildx smoke

@@ -7,6 +7,29 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+- README "Verifying a release" section with cosign verify, cosign
+  verify-attestation, `gh attestation verify`, and `helm pull --verify`
+  snippets for the published image and chart.
+- Release workflow now cosign-keyless-signs the published Helm chart OCI
+  artifact as well as the image, against the digest returned by
+  `helm push`.
+- CI `chart` job runs `helm/chart-testing` `ct lint` in addition to
+  `helm lint` and `helm template`, catching SemVer and metadata drift
+  that plain `helm lint` misses.
+
+### Changed
+- Release workflow signs the image digest once rather than once per tag —
+  all tags resolve to the same digest, so per-tag signing only recorded
+  duplicate signatures against the same subject.
+- Release workflow disables the buildx-embedded SBOM (`sbom: false` on
+  `docker/build-push-action`). `anchore/sbom-action` remains the single
+  source of the SPDX SBOM and the only input to the cosign SBOM
+  attestation, so image consumers no longer see two SBOMs referencing
+  the same digest.
+- Dockerfile `pip install` now passes `--disable-pip-version-check` to
+  pre-empt hadolint `DL3042` and trim startup noise.
+
 ## [0.4.1] — 2026-04-21
 
 ### Added

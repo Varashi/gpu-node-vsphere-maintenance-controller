@@ -411,13 +411,44 @@ The `release.yaml` GitHub Actions workflow then:
    section of [`CHANGELOG.md`](./CHANGELOG.md) and attaches the SBOM and
    the packaged chart `.tgz`.
 
-Verify a release image signature locally:
+### Verifying a release
+
+Every release is cosign-keyless-signed (GitHub OIDC), carries a SLSA build
+provenance attestation pushed to the registry, and has the SPDX SBOM
+attached as a cosign attestation. Verify any of these before deploying:
+
+```bash
+# 1. Image signature.
+cosign verify \
+  --certificate-identity-regexp 'https://github\.com/Varashi/gpu-node-vsphere-maintenance-controller/\.github/workflows/release\.yaml@refs/tags/v.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/varashi/gpu-node-vsphere-maintenance-controller:<tag>
+
+# 2. SBOM attestation (SPDX).
+cosign verify-attestation --type spdxjson \
+  --certificate-identity-regexp 'https://github\.com/Varashi/gpu-node-vsphere-maintenance-controller/\.github/workflows/release\.yaml@refs/tags/v.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/varashi/gpu-node-vsphere-maintenance-controller:<tag>
+
+# 3. SLSA build provenance (GitHub Attestations).
+gh attestation verify \
+  oci://ghcr.io/varashi/gpu-node-vsphere-maintenance-controller:<tag> \
+  --owner Varashi
+```
+
+Verify the Helm chart the same way — the release workflow signs chart
+digests too:
 
 ```bash
 cosign verify \
   --certificate-identity-regexp 'https://github\.com/Varashi/gpu-node-vsphere-maintenance-controller/\.github/workflows/release\.yaml@refs/tags/v.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/varashi/gpu-node-vsphere-maintenance-controller:<tag>
+  ghcr.io/varashi/charts/gpu-node-vsphere-maintenance-controller:<tag>
+
+# Or pull + verify in one shot (requires helm 3.8+ experimental OCI).
+helm pull \
+  oci://ghcr.io/varashi/charts/gpu-node-vsphere-maintenance-controller \
+  --version <tag> --verify
 ```
 
 ## Version history

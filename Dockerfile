@@ -8,7 +8,8 @@ LABEL org.opencontainers.image.licenses="MIT"
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir pyVmomi==8.0.3.0.1 kubernetes==31.0.0
+RUN pip install --no-cache-dir --disable-pip-version-check \
+      pyVmomi==8.0.3.0.1 kubernetes==31.0.0
 
 COPY controller.py .
 

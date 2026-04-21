@@ -82,7 +82,10 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           provenance: true
-          sbom: true
+          # SBOM is produced downstream by anchore/sbom-action and attached
+          # as a cosign attestation, so skip the buildx-embedded SBOM to
+          # avoid two different SBOMs against the same digest.
+          sbom: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -92,11 +95,10 @@ jobs:
       - name: Cosign keyless sign
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
-          TAGS: ${{ steps.meta.outputs.tags }}
-        run: |
-          for tag in $TAGS; do
-            cosign sign --yes "${tag}@${DIGEST}"
-          done
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        # All tags point at the same digest; sign the digest once rather
+        # than re-signing it per tag.
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
 
       - name: Generate SBOM (SPDX)
         uses: anchore/sbom-action@v0
@@ -142,10 +144,24 @@ jobs:
                 --username ${{ github.actor }} --password-stdin
 
       - name: Push Helm chart (OCI)
+        id: chart_push
         run: |
           version="${{ steps.ver.outputs.version }}"
+          # helm push prints "Digest: sha256:..." to stderr; tee to capture.
           helm push "gpu-node-vsphere-maintenance-controller-${version}.tgz" \
-            "oci://${{ env.CHART_REPO }}"
+            "oci://${{ env.CHART_REPO }}" 2>&1 | tee push.log
+          digest=$(awk '/^Digest: /{print $2}' push.log)
+          if [ -z "$digest" ]; then
+            echo "Failed to capture chart digest" >&2
+            exit 1
+          fi
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Cosign keyless sign (chart)
+        env:
+          DIGEST: ${{ steps.chart_push.outputs.digest }}
+          CHART_REF: ${{ env.CHART_REPO }}/gpu-node-vsphere-maintenance-controller
+        run: cosign sign --yes "${CHART_REF}@${DIGEST}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
