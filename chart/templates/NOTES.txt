@@ -1,0 +1,26 @@
+Thank you for installing {{ .Chart.Name }} v{{ .Chart.Version }}.
+
+Controller image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+
+{{- if not (or .Values.vcenter.existingSecret .Values.vcenter.host) }}
+
+WARNING: No vCenter credentials supplied. Either set `vcenter.existingSecret`
+to a Secret you manage yourself (for example, one rendered by
+ExternalSecretsOperator), or populate `vcenter.host`, `vcenter.user`, and
+`vcenter.password` and the chart will render an inline Secret for you.
+{{- end }}
+
+{{- if not .Values.vcenter.caBundle.configMapName }}
+
+Note: vCenter TLS verification is DISABLED. To enable, create a ConfigMap
+containing your vCenter / issuing CA bundle (PEM) and set
+`vcenter.caBundle.configMapName` + `vcenter.caBundle.key`.
+{{- end }}
+
+Verify the controller is running:
+
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "gpu-node-vsphere-maintenance-controller.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "gpu-node-vsphere-maintenance-controller.fullname" . }} -f
+
+GPU-worker Node label (`{{ .Values.config.gpuNodeLabel }}`) identifies the
+nodes this controller will drain when their ESXi host enters maintenance.

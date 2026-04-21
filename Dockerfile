@@ -1,4 +1,4 @@
-FROM python:3.14-slim
+FROM python:3.13-slim
 
 LABEL org.opencontainers.image.title="gpu-node-vsphere-maintenance-controller"
 LABEL org.opencontainers.image.description="Kubernetes controller that automates ESXi maintenance mode for worker nodes with PCI passthrough (GPU or otherwise)."

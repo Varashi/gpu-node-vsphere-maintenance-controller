@@ -26,7 +26,7 @@ import urllib3.exceptions
 from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
 from kubernetes.client.rest import ApiException
-from pyVim.connect import Disconnect, SmartConnect
+from pyVim.connect import SmartConnect
 from pyVmomi import vim
 
 TRANSIENT_K8S_API_CODES = {408, 429, 500, 502, 503, 504}
@@ -45,11 +45,13 @@ def _is_transient_k8s_error(exc: BaseException) -> bool:
         return True
     return isinstance(exc, TRANSIENT_TRANSPORT_EXC)
 
+
 # ── Configuration ────────────────────────────────────────────────────────────
 
 VCENTER_HOST = os.environ["VCENTER_HOST"]
 VCENTER_USER = os.environ["VCENTER_USER"]
 VCENTER_PASSWORD = os.environ["VCENTER_PASSWORD"]
+VCENTER_CA_BUNDLE = os.environ.get("VCENTER_CA_BUNDLE") or None
 
 GPU_NODE_LABEL = os.environ.get(
     "GPU_NODE_LABEL", "intel.feature.node.kubernetes.io/gpu=true"
@@ -82,15 +84,23 @@ log = logging.getLogger(__name__)
 
 # ── vSphere client ────────────────────────────────────────────────────────────
 
+
 class VSphereClient:
     def __init__(self):
         self.si = None
         self._connect()
 
     def _connect(self):
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+        if VCENTER_CA_BUNDLE:
+            ctx = ssl.create_default_context(cafile=VCENTER_CA_BUNDLE)
+            log.info(f"vCenter TLS verification enabled (CA: {VCENTER_CA_BUNDLE})")
+        else:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            log.warning(
+                "vCenter TLS verification disabled — set VCENTER_CA_BUNDLE to enable"
+            )
         self.si = SmartConnect(
             host=VCENTER_HOST,
             user=VCENTER_USER,
@@ -112,9 +122,13 @@ class VSphereClient:
             content.rootFolder, [obj_type], True
         )
 
-    def get_hosts_state(self):
+    def get_inventory_snapshot(self):
         """
-        Returns {host_name: {"in_maintenance": bool, "entering_maintenance": bool}}
+        Single HostSystem walk producing both host states and vm→host map.
+
+        Returns (host_states, vm_host_map):
+          host_states: {host_name: {"in_maintenance": bool, "entering_maintenance": bool}}
+          vm_host_map: {vm_name: host_name}
 
         "entering_maintenance" is True when a HostSystem.enterMaintenanceMode task
         is actively running — this fires before inMaintenanceMode flips to True,
@@ -122,19 +136,27 @@ class VSphereClient:
         """
         self._ensure_connected()
         view = self._container(vim.HostSystem)
-        result = {}
+        host_states = {}
+        vm_host_map = {}
         for host in view.view:
             entering = any(
                 t.info.descriptionId == "HostSystem.enterMaintenanceMode"
                 and t.info.state == "running"
                 for t in host.recentTask
             )
-            result[host.name] = {
+            host_states[host.name] = {
                 "in_maintenance": host.runtime.inMaintenanceMode,
                 "entering_maintenance": entering,
             }
+            for vm in host.vm:
+                vm_host_map[vm.name] = host.name
         view.Destroy()
-        return result
+        return host_states, vm_host_map
+
+    def get_hosts_state(self):
+        """Back-compat wrapper — returns only host_states from the inventory snapshot."""
+        host_states, _ = self.get_inventory_snapshot()
+        return host_states
 
     def get_vm_names_on_host(self, host_name):
         """Returns list of VM names currently on the given ESXi host."""
@@ -265,16 +287,14 @@ class VSphereClient:
             )
             vm.ShutdownGuest()
         except vim.fault.ToolsUnavailable:
-            log.warning(
-                f"VMware Tools unavailable on {vm_name} — hard powering off"
-            )
-            self._wait_task(vm.PowerOff())
+            log.warning(f"VMware Tools unavailable on {vm_name} — hard powering off")
+            self._hard_power_off(vm, vm_name)
             return
         except vim.fault.VimFault as e:
             log.warning(
                 f"ShutdownGuest on {vm_name} rejected ({e.msg}) — hard powering off"
             )
-            self._wait_task(vm.PowerOff())
+            self._hard_power_off(vm, vm_name)
             return
 
         deadline = time.time() + GUEST_SHUTDOWN_TIMEOUT
@@ -288,7 +308,25 @@ class VSphereClient:
             f"Guest shutdown of {vm_name} did not complete in "
             f"{GUEST_SHUTDOWN_TIMEOUT}s — hard powering off"
         )
-        self._wait_task(vm.PowerOff())
+        self._hard_power_off(vm, vm_name)
+
+    def _hard_power_off(self, vm, vm_name):
+        """
+        Issue PowerOff and swallow the "already off" race: if a second
+        controller pod (e.g. during a rolling update) or DRS raced us to
+        power the VM off first, `_wait_task` surfaces the vim.fault
+        `InvalidPowerState` as a RuntimeError with "Powered off" in the
+        message. That's a success from our perspective.
+        """
+        try:
+            self._wait_task(vm.PowerOff())
+        except RuntimeError as e:
+            if "Powered off" not in str(e):
+                raise
+            log.info(
+                f"VM {vm_name} already powered off (concurrent power-off) "
+                f"— treating as success"
+            )
 
     def power_on_vm(self, vm_name):
         self._ensure_connected()
@@ -351,6 +389,7 @@ class VSphereClient:
 
 
 # ── Kubernetes client ─────────────────────────────────────────────────────────
+
 
 class K8sClient:
     def __init__(self):
@@ -426,12 +465,15 @@ class K8sClient:
             if e.status == 404:
                 pass  # already gone
             elif e.status == 429:
-                log.warning(f"Eviction of {namespace}/{name} blocked by PDB, will retry")
+                log.warning(
+                    f"Eviction of {namespace}/{name} blocked by PDB, will retry"
+                )
             else:
                 raise
 
 
 # ── Controller ────────────────────────────────────────────────────────────────
+
 
 class MaintenanceController:
     def __init__(self):
@@ -500,23 +542,9 @@ class MaintenanceController:
                 )
                 # reconcile_migrated will handle uncordoning once Ready
 
-        # Start fresh drains for hosts already entering/in maintenance with no annotation yet
-        gpu_nodes = self.gpu_node_names()
-        for host_name, state in host_states.items():
-            if not (state["in_maintenance"] or state["entering_maintenance"]):
-                continue
-            vms_on_host = self.vsphere.get_vm_names_on_host(host_name)
-            for vm in vms_on_host:
-                if vm not in gpu_nodes:
-                    continue
-                existing_state = self.k8s.get_annotation(vm, ANNOTATION_STATE)
-                if existing_state is None:
-                    log.info(
-                        f"Host {host_name} already entering/in maintenance at startup "
-                        f"and {vm} has no annotation — starting drain"
-                    )
-                    self.on_host_entered_maintenance(host_name)
-                    break  # on_host_entered_maintenance handles all VMs on this host
+        # Start fresh drains for hosts already entering/in maintenance with no annotation yet.
+        # Same catch-up logic runs every tick via reconcile_pending_drains.
+        self.reconcile_pending_drains(host_states)
 
         log.info("Startup reconciliation complete")
 
@@ -543,11 +571,14 @@ class MaintenanceController:
 
         for node_name in targets:
             log.info(f"Starting drain for GPU node {node_name} on host {host_name}")
-            self.k8s.patch_node_annotations(node_name, {
-                ANNOTATION_STATE: STATE_DRAINING,
-                ANNOTATION_HOST: host_name,
-                ANNOTATION_TIME: self.now_iso(),
-            })
+            self.k8s.patch_node_annotations(
+                node_name,
+                {
+                    ANNOTATION_STATE: STATE_DRAINING,
+                    ANNOTATION_HOST: host_name,
+                    ANNOTATION_TIME: self.now_iso(),
+                },
+            )
             self.k8s.cordon(node_name)
             # Issue initial evictions
             for pod in self.k8s.get_evictable_pods(node_name):
@@ -568,7 +599,10 @@ class MaintenanceController:
             annotations = node.metadata.annotations or {}
             state = annotations.get(ANNOTATION_STATE)
 
-            if state == STATE_POWERED_OFF and annotations.get(ANNOTATION_HOST) == host_name:
+            if (
+                state == STATE_POWERED_OFF
+                and annotations.get(ANNOTATION_HOST) == host_name
+            ):
                 log.info(f"Powering on VM {name}")
                 self.vsphere.power_on_vm(name)
             # STATE_MIGRATED nodes are already powered on elsewhere — nothing to do
@@ -638,7 +672,9 @@ class MaintenanceController:
 
         # Non-DRS path: find a free GPU host and cold migrate
         gpu_nodes = self.gpu_node_names()
-        free_host = self.vsphere.find_free_gpu_host(gpu_nodes, host_states, original_host)
+        free_host = self.vsphere.find_free_gpu_host(
+            gpu_nodes, host_states, original_host
+        )
 
         if free_host is None:
             log.info(
@@ -696,18 +732,24 @@ class MaintenanceController:
                 migrated_to = self._try_migrate(name, original_host, host_states)
 
                 if migrated_to:
-                    self.k8s.patch_node_annotations(name, {
-                        ANNOTATION_STATE: STATE_MIGRATED,
-                        ANNOTATION_HOST: original_host,
-                        ANNOTATION_MIGRATED_HOST: migrated_to,
-                        ANNOTATION_TIME: self.now_iso(),
-                    })
+                    self.k8s.patch_node_annotations(
+                        name,
+                        {
+                            ANNOTATION_STATE: STATE_MIGRATED,
+                            ANNOTATION_HOST: original_host,
+                            ANNOTATION_MIGRATED_HOST: migrated_to,
+                            ANNOTATION_TIME: self.now_iso(),
+                        },
+                    )
                 else:
-                    self.k8s.patch_node_annotations(name, {
-                        ANNOTATION_STATE: STATE_POWERED_OFF,
-                        ANNOTATION_HOST: original_host,
-                        ANNOTATION_TIME: self.now_iso(),
-                    })
+                    self.k8s.patch_node_annotations(
+                        name,
+                        {
+                            ANNOTATION_STATE: STATE_POWERED_OFF,
+                            ANNOTATION_HOST: original_host,
+                            ANNOTATION_TIME: self.now_iso(),
+                        },
+                    )
 
             else:
                 # Re-evict pods that haven't terminated yet (handles PDB retries)
@@ -719,7 +761,7 @@ class MaintenanceController:
                     f"({int(elapsed)}s / {DRAIN_TIMEOUT}s)"
                 )
 
-    def reconcile_powered_off(self, host_states: dict):
+    def reconcile_powered_off(self, host_states: dict, vm_host_map: dict):
         """Uncordon powered-off nodes once their host has exited maintenance and they're back Ready."""
         for node in self.k8s.get_gpu_nodes():
             name = node.metadata.name
@@ -733,35 +775,73 @@ class MaintenanceController:
             if h.get("in_maintenance") or h.get("entering_maintenance"):
                 # Host still in/entering maintenance — check if VM was already placed
                 # on a different host (e.g., by DRS or Rancher in a previous cycle)
-                actual_host = self.vsphere.get_vm_host(name)
+                actual_host = vm_host_map.get(name)
                 ah = host_states.get(actual_host, {}) if actual_host else {}
-                if (actual_host and actual_host != host
-                        and not ah.get("in_maintenance")
-                        and not ah.get("entering_maintenance")):
+                if (
+                    actual_host
+                    and actual_host != host
+                    and not ah.get("in_maintenance")
+                    and not ah.get("entering_maintenance")
+                ):
                     log.info(
                         f"VM {name} already running on {actual_host} — "
                         f"transitioning to migrated state"
                     )
-                    self.k8s.patch_node_annotations(name, {
-                        ANNOTATION_STATE: STATE_MIGRATED,
-                        ANNOTATION_HOST: host,
-                        ANNOTATION_MIGRATED_HOST: actual_host,
-                        ANNOTATION_TIME: self.now_iso(),
-                    })
+                    self.k8s.patch_node_annotations(
+                        name,
+                        {
+                            ANNOTATION_STATE: STATE_MIGRATED,
+                            ANNOTATION_HOST: host,
+                            ANNOTATION_MIGRATED_HOST: actual_host,
+                            ANNOTATION_TIME: self.now_iso(),
+                        },
+                    )
                 else:
-                    log.info(f"Node {name} powered off, host {host} still in maintenance")
+                    log.info(
+                        f"Node {name} powered off, host {host} still in maintenance"
+                    )
                 continue
 
             if self.k8s.is_ready(name):
                 log.info(f"Node {name} is Ready — uncordoning")
                 self.k8s.uncordon(name)
-                self.k8s.patch_node_annotations(name, {
-                    ANNOTATION_STATE: None,
-                    ANNOTATION_HOST: None,
-                    ANNOTATION_TIME: None,
-                })
+                self.k8s.patch_node_annotations(
+                    name,
+                    {
+                        ANNOTATION_STATE: None,
+                        ANNOTATION_HOST: None,
+                        ANNOTATION_TIME: None,
+                    },
+                )
             else:
                 log.info(f"Node {name} not yet Ready, waiting...")
+
+    def reconcile_pending_drains(self, host_states: dict):
+        """
+        Catch GPU nodes on in/entering-maintenance hosts that have no state
+        annotation yet. Handles two cases the edge-trigger in run() misses:
+          - A prior tick skipped the host because MAX_CONCURRENT_DRAINS was full
+            (the prev_active→now_active edge won't fire again).
+          - The host transitioned to maintenance while the controller was busy
+            and `last_host_state` already reflects the new state.
+        """
+        gpu_nodes = self.gpu_node_names()
+        if not gpu_nodes:
+            return
+        for host_name, state in host_states.items():
+            if not (state["in_maintenance"] or state["entering_maintenance"]):
+                continue
+            vms_on_host = self.vsphere.get_vm_names_on_host(host_name)
+            for vm in vms_on_host:
+                if vm not in gpu_nodes:
+                    continue
+                if self.k8s.get_annotation(vm, ANNOTATION_STATE) is None:
+                    log.info(
+                        f"Pending-drain pickup: host {host_name} in/entering "
+                        f"maintenance, {vm} has no state annotation — starting drain"
+                    )
+                    self.on_host_entered_maintenance(host_name)
+                    break  # on_host_entered_maintenance covers all VMs on this host
 
     def reconcile_migrated(self):
         """Uncordon migrated nodes once they're back Ready on their new host."""
@@ -776,12 +856,15 @@ class MaintenanceController:
             if self.k8s.is_ready(name):
                 log.info(f"Node {name} is Ready on {migrated_to} — uncordoning")
                 self.k8s.uncordon(name)
-                self.k8s.patch_node_annotations(name, {
-                    ANNOTATION_STATE: None,
-                    ANNOTATION_HOST: None,
-                    ANNOTATION_MIGRATED_HOST: None,
-                    ANNOTATION_TIME: None,
-                })
+                self.k8s.patch_node_annotations(
+                    name,
+                    {
+                        ANNOTATION_STATE: None,
+                        ANNOTATION_HOST: None,
+                        ANNOTATION_MIGRATED_HOST: None,
+                        ANNOTATION_TIME: None,
+                    },
+                )
             else:
                 log.info(
                     f"Node {name} migrated to {migrated_to}, not yet Ready, waiting..."
@@ -802,7 +885,7 @@ class MaintenanceController:
 
         while True:
             try:
-                host_states = self.vsphere.get_hosts_state()
+                host_states, vm_host_map = self.vsphere.get_inventory_snapshot()
 
                 for host_name, state in host_states.items():
                     in_maintenance = state["in_maintenance"]
@@ -835,8 +918,9 @@ class MaintenanceController:
                     self.last_host_state[host_name] = state
 
                 self.reconcile_draining(host_states)
-                self.reconcile_powered_off(host_states)
+                self.reconcile_powered_off(host_states, vm_host_map)
                 self.reconcile_migrated()
+                self.reconcile_pending_drains(host_states)
 
             except Exception as e:
                 if _is_transient_k8s_error(e):

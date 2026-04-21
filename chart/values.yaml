@@ -1,0 +1,101 @@
+# Default values for gpu-node-vsphere-maintenance-controller.
+
+image:
+  repository: ghcr.io/varashi/gpu-node-vsphere-maintenance-controller
+  # -- Overrides the image tag (defaults to Chart.appVersion)
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Only one replica is supported (no leader election); Recreate strategy
+# guarantees the old pod fully terminates before the new one starts.
+replicaCount: 1
+strategy:
+  type: Recreate
+
+# vCenter connection.
+# Either set `existingSecret` to the name of a Secret you manage yourself
+# (for example, one rendered by ExternalSecretsOperator / ESO) containing
+# VCENTER_HOST, VCENTER_USER, VCENTER_PASSWORD — or populate `host`, `user`,
+# `password` below and the chart will render a plain Secret for you.
+vcenter:
+  existingSecret: ""
+  host: ""
+  user: ""
+  password: ""
+
+  # Optional: path inside the container to a CA bundle for vCenter TLS
+  # verification. Set `caBundle.configMapName` to a ConfigMap you have
+  # created that contains the CA (keyed by `caBundle.key`). When set, the
+  # chart mounts it at `caBundle.mountPath` and exports VCENTER_CA_BUNDLE.
+  # Leave `configMapName` empty to keep TLS verification disabled.
+  caBundle:
+    configMapName: ""
+    key: ca.pem
+    mountPath: /etc/ssl/vcenter-ca
+
+# Controller tunables — rendered into the controller-config ConfigMap.
+config:
+  pollIntervalSeconds: 30
+  drainTimeoutSeconds: 600
+  guestShutdownTimeoutSeconds: 120
+  powerOnTimeoutSeconds: 300
+  maxConcurrentDrains: 1
+  gpuNodeLabel: "intel.feature.node.kubernetes.io/gpu=true"
+  dryRun: false
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+rbac:
+  create: true
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext: {}
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65532
+  capabilities:
+    drop: ["ALL"]
+  seccompProfile:
+    type: RuntimeDefault
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 128Mi
+
+# Default keeps the controller off GPU workers — otherwise it would
+# drain itself. Override to `{}` to disable.
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: intel.feature.node.kubernetes.io/gpu
+              operator: DoesNotExist
+
+nodeSelector: {}
+tolerations: []
+priorityClassName: ""
+
+# Extra environment variables merged into the container env list.
+extraEnv: []
+# - name: FOO
+#   value: bar
+
+# Extra volumes / volumeMounts for unusual cases (additional CA chains, etc).
+extraVolumes: []
+extraVolumeMounts: []

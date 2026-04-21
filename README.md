@@ -101,7 +101,63 @@ transitions it to `migrated`.
 
 ## Deployment
 
-Minimal manifests (adjust namespace / credentials source as needed):
+### Helm (OCI chart — recommended)
+
+The chart is published as an OCI artifact alongside the image:
+
+```bash
+helm upgrade --install gpu-node-vsphere-maintenance \
+  oci://ghcr.io/varashi/charts/gpu-node-vsphere-maintenance-controller \
+  --version 0.4.0 \
+  --namespace gpu-node-vsphere-maintenance --create-namespace \
+  --set vcenter.host=vcenter.example.com \
+  --set vcenter.user=maintenance-controller@vsphere.local \
+  --set vcenter.password='replace-me'
+```
+
+To pair with External Secrets Operator, render a Secret containing
+`VCENTER_HOST` / `VCENTER_USER` / `VCENTER_PASSWORD` yourself and pass
+`--set vcenter.existingSecret=<name>` instead. To enable TLS verification,
+create a ConfigMap containing your CA bundle and pass
+`--set vcenter.caBundle.configMapName=<name>`.
+
+A Flux `HelmRelease` example:
+
+```yaml
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: OCIRepository
+metadata:
+  name: gpu-node-vsphere-maintenance-controller
+  namespace: gpu-node-vsphere-maintenance
+spec:
+  interval: 1h
+  url: oci://ghcr.io/varashi/charts/gpu-node-vsphere-maintenance-controller
+  ref:
+    tag: 0.4.0
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: gpu-node-vsphere-maintenance-controller
+  namespace: gpu-node-vsphere-maintenance
+spec:
+  interval: 1h
+  chartRef:
+    kind: OCIRepository
+    name: gpu-node-vsphere-maintenance-controller
+  values:
+    vcenter:
+      existingSecret: vsphere-credentials
+      caBundle:
+        configMapName: vcenter-ca
+```
+
+See `chart/values.yaml` in this repo for the full value surface.
+
+### Raw manifests
+
+If you would rather skip Helm, the equivalent manifests (adjust namespace
+and credentials source as needed):
 
 ```yaml
 apiVersion: v1
@@ -129,9 +185,6 @@ rules:
   - apiGroups: [""]
     resources: ["pods/eviction"]
     verbs: ["create"]
-  - apiGroups: ["policy"]
-    resources: ["poddisruptionbudgets"]
-    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -178,6 +231,8 @@ metadata:
   namespace: gpu-node-vsphere-maintenance
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: gpu-node-vsphere-maintenance
@@ -260,6 +315,7 @@ spec:
 | `VCENTER_HOST`              | *(required)*                                | vCenter FQDN or IP                                                            |
 | `VCENTER_USER`              | *(required)*                                | vCenter username                                                              |
 | `VCENTER_PASSWORD`          | *(required)*                                | vCenter password                                                              |
+| `VCENTER_CA_BUNDLE`         | *(unset)*                                   | Path to CA bundle (PEM). If set, enables TLS verification against vCenter.    |
 | `GPU_NODE_LABEL`            | `intel.feature.node.kubernetes.io/gpu=true` | Node label selector (`key=value`) identifying GPU workers                     |
 | `POLL_INTERVAL_SECONDS`     | `30`                                        | How often to poll vSphere for host state changes                              |
 | `DRAIN_TIMEOUT_SECONDS`     | `600`                                       | Max time to wait for a drain to finish before forcing power-off               |
@@ -268,8 +324,11 @@ spec:
 | `MAX_CONCURRENT_DRAINS`     | `1`                                         | Upper bound on simultaneous drain operations                                  |
 | `DRY_RUN`                   | `false`                                     | If `true`, log actions without executing vSphere / Kubernetes mutations       |
 
-TLS certificate verification against vCenter is currently disabled
-(homelab-style). If that matters to you, patch `VSphereClient._connect()`.
+TLS certificate verification against vCenter is opt-in. Default is unverified
+(homelab-style). To enable, mount your vCenter / issuing CA bundle (PEM) into
+the pod and set `VCENTER_CA_BUNDLE` to the mounted path — for example by
+adding a CA `ConfigMap`, a `volumeMounts` entry, and
+`VCENTER_CA_BUNDLE: /etc/ssl/vcenter-ca.pem` to the env block.
 
 ## Building from source
 
@@ -279,7 +338,7 @@ docker push  ghcr.io/you/gpu-node-vsphere-maintenance-controller:dev
 ```
 
 Source layout is deliberately tiny — a single `controller.py` plus a
-minimal Python 3.14 Dockerfile. Dependencies: `pyVmomi` and the official
+minimal Python 3.13 Dockerfile. Dependencies: `pyVmomi` and the official
 Kubernetes Python client.
 
 ## Race conditions handled
@@ -288,6 +347,9 @@ Kubernetes Python client.
   concurrently, the `PowerOn()` call returns an "already powered on" error.
   The controller verifies the VM is on a healthy (non-maintenance) host; if
   it landed on a maintenance host, it re-raises.
+- **Concurrent power-off**: symmetric to the power-on race. If a `PowerOff()`
+  call lands on a VM that is already off, the controller treats the
+  "Powered off" error as success.
 - **Stale `powered-off` annotation**: if a VM is already running elsewhere
   when the controller inspects it, state is advanced to `migrated` without
   waiting for the original host to leave maintenance.
@@ -300,34 +362,52 @@ Kubernetes Python client.
 - One VM per GPU host is assumed for migration target selection.
 - Cluster-level PDBs can prevent draining; the controller does not force
   evictions.
-- No leader election — run `replicas: 1`. A brief double-run during rollout
-  is harmless (all operations are idempotent against the state machine).
+- No leader election — run `replicas: 1` with `strategy.type: Recreate`
+  (shown in the example Deployment). `Recreate` guarantees the old pod has
+  fully terminated before the new one starts, avoiding any double-run race
+  during rollouts. All operations are also idempotent against the state
+  machine as a defence in depth.
 - Only *enter* maintenance mode is detected via `recentTask`; *exit* is
   detected by watching `inMaintenanceMode` transition from `true` back to
   `false`, so a missed task during a controller restart is picked up on
   the next poll.
 
+## Release process
+
+Releases are cut by pushing a SemVer tag `vX.Y.Z` to `main`:
+
+```bash
+git tag v0.3.1
+git push origin v0.3.1
+```
+
+The `release.yaml` GitHub Actions workflow then:
+
+1. Builds and pushes the controller image to
+   `ghcr.io/varashi/gpu-node-vsphere-maintenance-controller`, multi-arch
+   (`linux/amd64`, `linux/arm64`), with cosign keyless signatures (GitHub
+   OIDC), an SPDX SBOM, and a build-provenance attestation.
+2. Packages the Helm chart in `chart/` with `version` and `appVersion`
+   matching the tag and pushes it to
+   `oci://ghcr.io/varashi/charts/gpu-node-vsphere-maintenance-controller`.
+3. Creates a GitHub Release whose body is extracted from the matching
+   section of [`CHANGELOG.md`](./CHANGELOG.md) and attaches the SBOM and
+   the packaged chart `.tgz`.
+
+Verify a release image signature locally:
+
+```bash
+cosign verify \
+  --certificate-identity-regexp 'https://github\.com/Varashi/gpu-node-vsphere-maintenance-controller/\.github/workflows/release\.yaml@refs/tags/v.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/varashi/gpu-node-vsphere-maintenance-controller:<tag>
+```
+
 ## Version history
 
-- **v0.3.0** — graceful guest shutdown via VMware Tools before hard
-  power-off (`GUEST_SHUTDOWN_TIMEOUT_SECONDS`, default `120`); falls
-  back to `PowerOff()` on Tools-unavailable, VimFault, or timeout.
-  `_try_migrate` now logs expected vSphere failures (no compatible
-  host, insufficient resources, etc.) as one-line WARNINGs instead of
-  full ERROR+traceback; genuine bugs still get the traceback.
-- **v0.2.3** — reconcile loop classifies transient kube-apiserver
-  errors (408/429/5xx) and urllib3 transport blips as WARNING instead
-  of ERROR+traceback; genuine exceptions still get the full traceback.
-- **v0.2.2** — no code change; added OCI image labels after extraction
-  to a dedicated GitHub repo.
-- **v0.2.1** — concurrent-power-on race handled; stale `powered-off`
-  recovery.
-- **v0.2.0** — cold-migrate to a free GPU host after power-off (DRS auto
-  or manual relocation).
-- **v0.1.1** — fix: `reconcile_powered_off` checked host state before
-  uncordoning.
-- **v0.1.0** — initial: drain → power-off → wait-for-exit → power-on →
-  uncordon.
+See [`CHANGELOG.md`](./CHANGELOG.md) for the full history. Released tags
+are also listed on the [GitHub Releases](https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/releases)
+page with signed assets and SBOMs.
 
 ## License
 

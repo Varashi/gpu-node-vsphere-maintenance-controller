@@ -1,0 +1,29 @@
+apiVersion: v2
+name: gpu-node-vsphere-maintenance-controller
+description: |
+  Kubernetes controller that automates ESXi maintenance mode for worker
+  nodes with PCI passthrough (GPU or otherwise). Detects EnterMaintenanceMode
+  on ESXi hosts, drains the matching Kubernetes nodes, powers off the VMs,
+  migrates them to a free GPU host if possible, and returns them to service.
+type: application
+version: 0.4.0
+appVersion: "0.4.0"
+kubeVersion: ">=1.26.0-0"
+keywords:
+  - vsphere
+  - esxi
+  - maintenance
+  - gpu
+  - pci-passthrough
+  - kubernetes
+home: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller
+sources:
+  - https://github.com/Varashi/gpu-node-vsphere-maintenance-controller
+maintainers:
+  - name: Varashi
+    url: https://github.com/Varashi
+annotations:
+  artifacthub.io/license: MIT
+  artifacthub.io/changes: |
+    - kind: added
+      description: Initial Helm chart release.

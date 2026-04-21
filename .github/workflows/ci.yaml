@@ -1,0 +1,70 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: python / ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install ruff
+        run: pip install --no-cache-dir ruff==0.7.4
+      - name: ruff check
+        run: ruff check controller.py
+      - name: ruff format --check
+        run: ruff format --check controller.py
+
+  dockerfile:
+    name: dockerfile / hadolint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+
+  chart:
+    name: helm / lint + template
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+      - name: helm lint
+        run: helm lint chart/
+      - name: helm template (defaults + CA bundle + ESO path)
+        run: |
+          helm template ci chart/ > /dev/null
+          helm template ci chart/ \
+            --set vcenter.host=vc.example.com \
+            --set vcenter.user=u --set vcenter.password=p > /dev/null
+          helm template ci chart/ \
+            --set vcenter.existingSecret=my-eso-secret \
+            --set vcenter.caBundle.configMapName=vcenter-ca > /dev/null
+
+  image:
+    name: image / buildx smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: docker build (no push, linux/amd64,linux/arm64)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          tags: ci/gpu-node-vsphere-maintenance-controller:ci
