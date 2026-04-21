@@ -10,11 +10,12 @@ ExternalSecretsOperator), or populate `vcenter.host`, `vcenter.user`, and
 `vcenter.password` and the chart will render an inline Secret for you.
 {{- end }}
 
-{{- if not .Values.vcenter.caBundle.configMapName }}
+{{- if and (not .Values.vcenter.caBundle.configMapName) (not .Values.vcenter.tlsVerify) }}
 
-Note: vCenter TLS verification is DISABLED. To enable, create a ConfigMap
-containing your vCenter / issuing CA bundle (PEM) and set
-`vcenter.caBundle.configMapName` + `vcenter.caBundle.key`.
+Note: vCenter TLS verification is DISABLED. To enable, pick one:
+  - Self-signed or private CA: create a ConfigMap with your CA bundle (PEM)
+    and set `vcenter.caBundle.configMapName` + `vcenter.caBundle.key`.
+  - Public CA (Let's Encrypt, DigiCert, etc.): set `vcenter.tlsVerify: true`.
 {{- end }}
 
 Verify the controller is running:

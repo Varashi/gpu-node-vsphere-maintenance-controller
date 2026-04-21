@@ -26,4 +26,4 @@ annotations:
   artifacthub.io/license: MIT
   artifacthub.io/changes: |
     - kind: added
-      description: Initial Helm chart release.
+      description: VCENTER_TLS_VERIFY / vcenter.tlsVerify for public-CA vCenter certs.
