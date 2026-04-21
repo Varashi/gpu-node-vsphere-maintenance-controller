@@ -31,11 +31,17 @@ vcenter:
   # verification. Set `caBundle.configMapName` to a ConfigMap you have
   # created that contains the CA (keyed by `caBundle.key`). When set, the
   # chart mounts it at `caBundle.mountPath` and exports VCENTER_CA_BUNDLE.
-  # Leave `configMapName` empty to keep TLS verification disabled.
+  # Use this for self-signed certs or a private/self-hosted CA.
   caBundle:
     configMapName: ""
     key: ca.pem
     mountPath: /etc/ssl/vcenter-ca
+
+  # Set to true when the vCenter certificate chains to a public CA already
+  # in the container's system trust store (e.g. Let's Encrypt, DigiCert).
+  # Ignored when `caBundle.configMapName` is set. Leave false to keep TLS
+  # verification disabled.
+  tlsVerify: false
 
 # Controller tunables — rendered into the controller-config ConfigMap.
 config:

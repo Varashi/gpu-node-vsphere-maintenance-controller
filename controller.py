@@ -52,6 +52,7 @@ VCENTER_HOST = os.environ["VCENTER_HOST"]
 VCENTER_USER = os.environ["VCENTER_USER"]
 VCENTER_PASSWORD = os.environ["VCENTER_PASSWORD"]
 VCENTER_CA_BUNDLE = os.environ.get("VCENTER_CA_BUNDLE") or None
+VCENTER_TLS_VERIFY = os.environ.get("VCENTER_TLS_VERIFY", "false").lower() == "true"
 
 GPU_NODE_LABEL = os.environ.get(
     "GPU_NODE_LABEL", "intel.feature.node.kubernetes.io/gpu=true"
@@ -93,13 +94,19 @@ class VSphereClient:
     def _connect(self):
         if VCENTER_CA_BUNDLE:
             ctx = ssl.create_default_context(cafile=VCENTER_CA_BUNDLE)
-            log.info(f"vCenter TLS verification enabled (CA: {VCENTER_CA_BUNDLE})")
+            log.info(
+                f"vCenter TLS verification enabled (CA bundle: {VCENTER_CA_BUNDLE})"
+            )
+        elif VCENTER_TLS_VERIFY:
+            ctx = ssl.create_default_context()
+            log.info("vCenter TLS verification enabled (system trust store)")
         else:
             ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
             log.warning(
-                "vCenter TLS verification disabled — set VCENTER_CA_BUNDLE to enable"
+                "vCenter TLS verification disabled — set VCENTER_CA_BUNDLE "
+                "or VCENTER_TLS_VERIFY=true to enable"
             )
         self.si = SmartConnect(
             host=VCENTER_HOST,

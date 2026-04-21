@@ -15,4 +15,6 @@ data:
   DRY_RUN: {{ .Values.config.dryRun | quote }}
   {{- if .Values.vcenter.caBundle.configMapName }}
   VCENTER_CA_BUNDLE: {{ printf "%s/%s" .Values.vcenter.caBundle.mountPath .Values.vcenter.caBundle.key | quote }}
+  {{- else if .Values.vcenter.tlsVerify }}
+  VCENTER_TLS_VERIFY: "true"
   {{- end }}

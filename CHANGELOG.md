@@ -7,12 +7,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-### Planned
-- `VCENTER_TLS_VERIFY` flag (bool) for vCenter certs issued by a public
-  CA. Enabling it uses `ssl.create_default_context()` with no `cafile`,
-  which falls back to OpenSSL's system trust store. Chart exposes it as
-  `vcenter.tlsVerify`. Existing `VCENTER_CA_BUNDLE` continues to cover
-  the self-signed and self-hosted-CA cases unchanged.
+## [0.4.1] — 2026-04-21
+
+### Added
+- `VCENTER_TLS_VERIFY` (bool, default `false`) for vCenter certificates
+  issued by a public CA. When `true` and `VCENTER_CA_BUNDLE` is unset,
+  the controller uses `ssl.create_default_context()` with no `cafile`,
+  which falls back to OpenSSL's system trust store shipped in the
+  container image. Chart exposes it as `vcenter.tlsVerify`.
+- README "TLS verification modes" section covering the three supported
+  cases: self-signed, private/self-hosted CA, public CA.
 
 ## [0.4.0] — 2026-04-21
 
@@ -108,7 +112,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Initial release: drain → power-off → wait-for-exit → power-on →
   uncordon, driven by edge-triggered `HostSystem.recentTask` polling.
 
-[Unreleased]: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/compare/v0.2.2...v0.2.3

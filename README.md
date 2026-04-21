@@ -108,7 +108,7 @@ The chart is published as an OCI artifact alongside the image:
 ```bash
 helm upgrade --install gpu-node-vsphere-maintenance \
   oci://ghcr.io/varashi/charts/gpu-node-vsphere-maintenance-controller \
-  --version 0.4.0 \
+  --version 0.4.1 \
   --namespace gpu-node-vsphere-maintenance --create-namespace \
   --set vcenter.host=vcenter.example.com \
   --set vcenter.user=maintenance-controller@vsphere.local \
@@ -133,7 +133,7 @@ spec:
   interval: 1h
   url: oci://ghcr.io/varashi/charts/gpu-node-vsphere-maintenance-controller
   ref:
-    tag: 0.4.0
+    tag: 0.4.1
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
@@ -315,7 +315,8 @@ spec:
 | `VCENTER_HOST`              | *(required)*                                | vCenter FQDN or IP                                                            |
 | `VCENTER_USER`              | *(required)*                                | vCenter username                                                              |
 | `VCENTER_PASSWORD`          | *(required)*                                | vCenter password                                                              |
-| `VCENTER_CA_BUNDLE`         | *(unset)*                                   | Path to CA bundle (PEM). If set, enables TLS verification against vCenter.    |
+| `VCENTER_CA_BUNDLE`         | *(unset)*                                   | Path to CA bundle (PEM). When set, enables TLS verification against this CA. Covers self-signed and private/self-hosted CAs. |
+| `VCENTER_TLS_VERIFY`        | `false`                                     | When `true` and `VCENTER_CA_BUNDLE` is unset, verify vCenter against the container's system trust store (publicly-signed certs). |
 | `GPU_NODE_LABEL`            | `intel.feature.node.kubernetes.io/gpu=true` | Node label selector (`key=value`) identifying GPU workers                     |
 | `POLL_INTERVAL_SECONDS`     | `30`                                        | How often to poll vSphere for host state changes                              |
 | `DRAIN_TIMEOUT_SECONDS`     | `600`                                       | Max time to wait for a drain to finish before forcing power-off               |
@@ -324,11 +325,27 @@ spec:
 | `MAX_CONCURRENT_DRAINS`     | `1`                                         | Upper bound on simultaneous drain operations                                  |
 | `DRY_RUN`                   | `false`                                     | If `true`, log actions without executing vSphere / Kubernetes mutations       |
 
-TLS certificate verification against vCenter is opt-in. Default is unverified
-(homelab-style). To enable, mount your vCenter / issuing CA bundle (PEM) into
-the pod and set `VCENTER_CA_BUNDLE` to the mounted path — for example by
-adding a CA `ConfigMap`, a `volumeMounts` entry, and
-`VCENTER_CA_BUNDLE: /etc/ssl/vcenter-ca.pem` to the env block.
+### TLS verification modes
+
+Certificate verification against vCenter is opt-in. Default is unverified
+(homelab-style). Three supported modes:
+
+- **Self-signed certificate** (default vCenter out of the box): export the
+  certificate from vCenter, mount it as a `ConfigMap` into the pod, and set
+  `VCENTER_CA_BUNDLE` to the mounted path (e.g. `/etc/ssl/vcenter-ca/ca.pem`).
+  Use the chart's `vcenter.caBundle.configMapName` to wire this up.
+- **Private / self-hosted CA** (e.g. an internal AD CS issuing the vCenter
+  cert): identical to the self-signed case — mount the issuing CA's bundle
+  and set `VCENTER_CA_BUNDLE` to that path. Intermediate certs concatenated
+  into the same PEM work.
+- **Public CA** (Let's Encrypt, DigiCert, etc.): set `VCENTER_TLS_VERIFY=true`
+  and leave `VCENTER_CA_BUNDLE` unset. The controller uses Python's
+  `ssl.create_default_context()` with no cafile, which falls back to
+  OpenSSL's system trust store (the CA certs shipped in the container
+  image). In the chart, set `vcenter.tlsVerify: true`.
+
+`VCENTER_CA_BUNDLE` takes precedence over `VCENTER_TLS_VERIFY` when both
+are set.
 
 ## Building from source
 

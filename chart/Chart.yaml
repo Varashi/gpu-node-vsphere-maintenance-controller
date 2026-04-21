@@ -6,8 +6,8 @@ description: |
   on ESXi hosts, drains the matching Kubernetes nodes, powers off the VMs,
   migrates them to a free GPU host if possible, and returns them to service.
 type: application
-version: 0.4.0
-appVersion: "0.4.0"
+version: 0.4.1
+appVersion: "0.4.1"
 kubeVersion: ">=1.26.0-0"
 keywords:
   - vsphere
