@@ -6,8 +6,8 @@ description: |
   on ESXi hosts, drains the matching Kubernetes nodes, powers off the VMs,
   migrates them to a free GPU host if possible, and returns them to service.
 type: application
-version: 0.4.3
-appVersion: "0.4.3"
+version: 0.4.4
+appVersion: "0.4.4"
 kubeVersion: ">=1.26.0-0"
 keywords:
   - vsphere
@@ -25,5 +25,5 @@ maintainers:
 annotations:
   artifacthub.io/license: MIT
   artifacthub.io/changes: |
-    - kind: changed
-      description: Docs fix — drop misleading helm pull --verify (cosign-signed, not PGP).
+    - kind: fixed
+      description: Tolerate vCLS VMs vanishing mid-enumeration during host maintenance entry.

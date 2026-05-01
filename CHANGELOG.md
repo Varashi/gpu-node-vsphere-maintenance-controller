@@ -7,6 +7,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.4.4] — 2026-05-01
+
+### Fixed
+- `get_vm_names_on_host` and `get_inventory_snapshot` no longer abort the
+  reconcile loop when a VM becomes inaccessible mid-iteration. vCenter
+  evacuates/recreates vCLS agent VMs the moment a host enters maintenance,
+  and the controller's service account typically has no `System.View` on
+  the vCLS folder, so the doomed MoRef returned `vim.fault.NoPermission`
+  from `.name` and propagated up as an unhandled error. Per-VM access now
+  catches `ManagedObjectNotFound` + `NoPermission` and skips the entry.
+
 ## [0.4.3] — 2026-04-21
 
 Docs / CI follow-up from post-v0.4.2 review. No controller code change.

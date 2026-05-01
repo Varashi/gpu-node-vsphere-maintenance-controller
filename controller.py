@@ -27,7 +27,7 @@ from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
 from kubernetes.client.rest import ApiException
 from pyVim.connect import SmartConnect
-from pyVmomi import vim
+from pyVmomi import vim, vmodl
 
 TRANSIENT_K8S_API_CODES = {408, 429, 500, 502, 503, 504}
 TRANSIENT_TRANSPORT_EXC = (
@@ -156,7 +156,15 @@ class VSphereClient:
                 "entering_maintenance": entering,
             }
             for vm in host.vm:
-                vm_host_map[vm.name] = host.name
+                try:
+                    vm_host_map[vm.name] = host.name
+                except (
+                    vmodl.fault.ManagedObjectNotFound,
+                    vim.fault.NoPermission,
+                ) as e:
+                    log.debug(
+                        "Skipping VM on %s during inventory walk: %s", host.name, e
+                    )
         view.Destroy()
         return host_states, vm_host_map
 
@@ -166,12 +174,28 @@ class VSphereClient:
         return host_states
 
     def get_vm_names_on_host(self, host_name):
-        """Returns list of VM names currently on the given ESXi host."""
+        """Returns list of VM names currently on the given ESXi host.
+
+        Per-VM .name access is wrapped to tolerate VMs that vanish or become
+        inaccessible mid-iteration — notably vCLS agent VMs, which vCenter
+        evacuates/recreates when a host enters maintenance and which the
+        controller's service account typically lacks System.View on.
+        """
         self._ensure_connected()
         view = self._container(vim.HostSystem)
         for host in view.view:
             if host.name == host_name:
-                names = [vm.name for vm in host.vm]
+                names = []
+                for vm in host.vm:
+                    try:
+                        names.append(vm.name)
+                    except (
+                        vmodl.fault.ManagedObjectNotFound,
+                        vim.fault.NoPermission,
+                    ) as e:
+                        log.debug(
+                            "Skipping VM on %s during enumeration: %s", host_name, e
+                        )
                 view.Destroy()
                 return names
         view.Destroy()
