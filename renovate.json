@@ -1,0 +1,35 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "prHourlyLimit": 0,
+  "prConcurrentLimit": 0,
+  "branchConcurrentLimit": 0,
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Inline pip pins in Dockerfile (pyVmomi, kubernetes)",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": [
+        "(?<depName>[A-Za-z0-9_.-]+)==(?<currentValue>\\d+(\\.\\d+)+(\\.[A-Za-z0-9.]+)?)"
+      ],
+      "datasourceTemplate": "pypi"
+    },
+    {
+      "customType": "regex",
+      "description": "Inline ruff pin in CI workflow",
+      "managerFilePatterns": ["/^\\.github/workflows/ci\\.ya?ml$/"],
+      "matchStrings": [
+        "ruff==(?<currentValue>\\d+\\.\\d+\\.\\d+)"
+      ],
+      "datasourceTemplate": "pypi",
+      "depNameTemplate": "ruff"
+    }
+  ],
+  "packageRules": [
+    {
+      "matchUpdateTypes": ["patch", "digest"],
+      "matchManagers": ["dockerfile", "github-actions", "helm-values"],
+      "automerge": true
+    }
+  ]
+}
