@@ -1,4 +1,4 @@
-# gpu-node-vsphere-maintenance-controller
+# vsphere-passthrough-node-controller
 
 A Kubernetes controller that safely handles ESXi maintenance mode transitions
 for worker nodes that use **PCI passthrough** (Intel ARC / NVIDIA / any
@@ -12,7 +12,7 @@ possible — migrates it (cold) to another GPU-capable host and brings it back
 online. When the original host exits maintenance, a powered-off node is
 returned to service automatically.
 
-Image: `ghcr.io/varashi/gpu-node-vsphere-maintenance-controller` (public).
+Image: `ghcr.io/varashi/vsphere-passthrough-node-controller` (public).
 
 ## Why this exists
 
@@ -149,10 +149,10 @@ mis-fire is destructive; turn it on once you trust the signal in your environmen
 The chart is published as an OCI artifact alongside the image:
 
 ```bash
-helm upgrade --install gpu-node-vsphere-maintenance \
-  oci://ghcr.io/varashi/charts/gpu-node-vsphere-maintenance-controller \
+helm upgrade --install vsphere-passthrough-node \
+  oci://ghcr.io/varashi/charts/vsphere-passthrough-node-controller \
   --version 0.4.3 \
-  --namespace gpu-node-vsphere-maintenance --create-namespace \
+  --namespace vsphere-passthrough-node --create-namespace \
   --set vcenter.host=vcenter.example.com \
   --set vcenter.user=maintenance-controller@vsphere.local \
   --set vcenter.password='replace-me'
@@ -170,24 +170,24 @@ A Flux `HelmRelease` example:
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: OCIRepository
 metadata:
-  name: gpu-node-vsphere-maintenance-controller
-  namespace: gpu-node-vsphere-maintenance
+  name: vsphere-passthrough-node-controller
+  namespace: vsphere-passthrough-node
 spec:
   interval: 1h
-  url: oci://ghcr.io/varashi/charts/gpu-node-vsphere-maintenance-controller
+  url: oci://ghcr.io/varashi/charts/vsphere-passthrough-node-controller
   ref:
     tag: 0.4.3
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
-  name: gpu-node-vsphere-maintenance-controller
-  namespace: gpu-node-vsphere-maintenance
+  name: vsphere-passthrough-node-controller
+  namespace: vsphere-passthrough-node
 spec:
   interval: 1h
   chartRef:
     kind: OCIRepository
-    name: gpu-node-vsphere-maintenance-controller
+    name: vsphere-passthrough-node-controller
   values:
     vcenter:
       existingSecret: vsphere-credentials
@@ -206,18 +206,18 @@ and credentials source as needed):
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: gpu-node-vsphere-maintenance
+  name: vsphere-passthrough-node
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: gpu-node-vsphere-maintenance
-  namespace: gpu-node-vsphere-maintenance
+  name: vsphere-passthrough-node
+  namespace: vsphere-passthrough-node
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: gpu-node-vsphere-maintenance
+  name: vsphere-passthrough-node
 rules:
   - apiGroups: [""]
     resources: ["nodes"]
@@ -232,21 +232,21 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: gpu-node-vsphere-maintenance
+  name: vsphere-passthrough-node
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: gpu-node-vsphere-maintenance
+  name: vsphere-passthrough-node
 subjects:
   - kind: ServiceAccount
-    name: gpu-node-vsphere-maintenance
-    namespace: gpu-node-vsphere-maintenance
+    name: vsphere-passthrough-node
+    namespace: vsphere-passthrough-node
 ---
 apiVersion: v1
 kind: Secret
 metadata:
   name: vsphere-credentials
-  namespace: gpu-node-vsphere-maintenance
+  namespace: vsphere-passthrough-node
 type: Opaque
 stringData:
   VCENTER_HOST: vcenter.example.com
@@ -257,7 +257,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: controller-config
-  namespace: gpu-node-vsphere-maintenance
+  namespace: vsphere-passthrough-node
 data:
   POLL_INTERVAL_SECONDS: "30"
   DRAIN_TIMEOUT_SECONDS: "600"
@@ -270,24 +270,24 @@ data:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: gpu-node-vsphere-maintenance
-  namespace: gpu-node-vsphere-maintenance
+  name: vsphere-passthrough-node
+  namespace: vsphere-passthrough-node
 spec:
   replicas: 1
   strategy:
     type: Recreate
   selector:
     matchLabels:
-      app: gpu-node-vsphere-maintenance
+      app: vsphere-passthrough-node
   template:
     metadata:
       labels:
-        app: gpu-node-vsphere-maintenance
+        app: vsphere-passthrough-node
     spec:
-      serviceAccountName: gpu-node-vsphere-maintenance
+      serviceAccountName: vsphere-passthrough-node
       containers:
         - name: controller
-          image: ghcr.io/varashi/gpu-node-vsphere-maintenance-controller:v0.3.0
+          image: ghcr.io/varashi/vsphere-passthrough-node-controller:v0.3.0
           envFrom:
             - secretRef:
                 name: vsphere-credentials
@@ -330,7 +330,7 @@ apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
   name: vsphere-credentials
-  namespace: gpu-node-vsphere-maintenance
+  namespace: vsphere-passthrough-node
 spec:
   refreshInterval: 1h
   secretStoreRef:
@@ -393,8 +393,8 @@ are set.
 ## Building from source
 
 ```bash
-docker build -t ghcr.io/you/gpu-node-vsphere-maintenance-controller:dev .
-docker push  ghcr.io/you/gpu-node-vsphere-maintenance-controller:dev
+docker build -t ghcr.io/you/vsphere-passthrough-node-controller:dev .
+docker push  ghcr.io/you/vsphere-passthrough-node-controller:dev
 ```
 
 Source layout is deliberately tiny — a single `controller.py` plus a
@@ -444,12 +444,12 @@ git push origin v0.3.1
 The `release.yaml` GitHub Actions workflow then:
 
 1. Builds and pushes the controller image to
-   `ghcr.io/varashi/gpu-node-vsphere-maintenance-controller`, multi-arch
+   `ghcr.io/varashi/vsphere-passthrough-node-controller`, multi-arch
    (`linux/amd64`, `linux/arm64`), with cosign keyless signatures (GitHub
    OIDC), an SPDX SBOM, and a build-provenance attestation.
 2. Packages the Helm chart in `chart/` with `version` and `appVersion`
    matching the tag and pushes it to
-   `oci://ghcr.io/varashi/charts/gpu-node-vsphere-maintenance-controller`.
+   `oci://ghcr.io/varashi/charts/vsphere-passthrough-node-controller`.
 3. Creates a GitHub Release whose body is extracted from the matching
    section of [`CHANGELOG.md`](./CHANGELOG.md) and attaches the SBOM and
    the packaged chart `.tgz`.
@@ -463,19 +463,19 @@ attached as a cosign attestation. Verify any of these before deploying:
 ```bash
 # 1. Image signature.
 cosign verify \
-  --certificate-identity-regexp 'https://github\.com/Varashi/gpu-node-vsphere-maintenance-controller/\.github/workflows/release\.yaml@refs/tags/v.*' \
+  --certificate-identity-regexp 'https://github\.com/Varashi/vsphere-passthrough-node-controller/\.github/workflows/release\.yaml@refs/tags/v.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/varashi/gpu-node-vsphere-maintenance-controller:<tag>
+  ghcr.io/varashi/vsphere-passthrough-node-controller:<tag>
 
 # 2. SBOM attestation (SPDX).
 cosign verify-attestation --type spdxjson \
-  --certificate-identity-regexp 'https://github\.com/Varashi/gpu-node-vsphere-maintenance-controller/\.github/workflows/release\.yaml@refs/tags/v.*' \
+  --certificate-identity-regexp 'https://github\.com/Varashi/vsphere-passthrough-node-controller/\.github/workflows/release\.yaml@refs/tags/v.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/varashi/gpu-node-vsphere-maintenance-controller:<tag>
+  ghcr.io/varashi/vsphere-passthrough-node-controller:<tag>
 
 # 3. SLSA build provenance (GitHub Attestations).
 gh attestation verify \
-  oci://ghcr.io/varashi/gpu-node-vsphere-maintenance-controller:<tag> \
+  oci://ghcr.io/varashi/vsphere-passthrough-node-controller:<tag> \
   --owner Varashi
 ```
 
@@ -484,9 +484,9 @@ chart digests too:
 
 ```bash
 cosign verify \
-  --certificate-identity-regexp 'https://github\.com/Varashi/gpu-node-vsphere-maintenance-controller/\.github/workflows/release\.yaml@refs/tags/v.*' \
+  --certificate-identity-regexp 'https://github\.com/Varashi/vsphere-passthrough-node-controller/\.github/workflows/release\.yaml@refs/tags/v.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/varashi/charts/gpu-node-vsphere-maintenance-controller:<tag>
+  ghcr.io/varashi/charts/vsphere-passthrough-node-controller:<tag>
 ```
 
 `helm pull --verify` is *not* supported against this chart: `--verify`
@@ -497,7 +497,7 @@ above instead.
 ## Version history
 
 See [`CHANGELOG.md`](./CHANGELOG.md) for the full history. Released tags
-are also listed on the [GitHub Releases](https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/releases)
+are also listed on the [GitHub Releases](https://github.com/Varashi/vsphere-passthrough-node-controller/releases)
 page with signed assets and SBOMs.
 
 ## License

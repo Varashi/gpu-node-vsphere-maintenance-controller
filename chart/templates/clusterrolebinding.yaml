@@ -2,15 +2,15 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "gpu-node-vsphere-maintenance-controller.fullname" . }}
+  name: {{ include "vsphere-passthrough-node-controller.fullname" . }}
   labels:
-    {{- include "gpu-node-vsphere-maintenance-controller.labels" . | nindent 4 }}
+    {{- include "vsphere-passthrough-node-controller.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "gpu-node-vsphere-maintenance-controller.fullname" . }}
+  name: {{ include "vsphere-passthrough-node-controller.fullname" . }}
 subjects:
   - kind: ServiceAccount
-    name: {{ include "gpu-node-vsphere-maintenance-controller.serviceAccountName" . }}
+    name: {{ include "vsphere-passthrough-node-controller.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 {{- end }}

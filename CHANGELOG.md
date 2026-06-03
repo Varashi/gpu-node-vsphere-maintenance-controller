@@ -107,7 +107,7 @@ No controller code change. Supply-chain and CI polish only.
   now consults the map instead of making a per-node `get_vm_host` round-trip
   to vCenter on every poll.
 - Minimal Helm chart under `chart/`, published as OCI to
-  `ghcr.io/varashi/charts/gpu-node-vsphere-maintenance-controller`.
+  `ghcr.io/varashi/charts/vsphere-passthrough-node-controller`.
 - GitHub Actions: `ci.yaml` (ruff, hadolint, helm lint, buildx smoke build)
   on pull requests; `release.yaml` on `v*.*.*` tag push builds multi-arch
   images (amd64, arm64), cosign-signs keyless via OIDC, attaches SBOM and
@@ -186,15 +186,15 @@ No controller code change. Supply-chain and CI polish only.
 - Initial release: drain → power-off → wait-for-exit → power-on →
   uncordon, driven by edge-triggered `HostSystem.recentTask` polling.
 
-[Unreleased]: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/compare/v0.4.3...HEAD
-[0.4.3]: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/compare/v0.4.2...v0.4.3
-[0.4.2]: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/compare/v0.4.1...v0.4.2
-[0.4.1]: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/compare/v0.4.0...v0.4.1
-[0.4.0]: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/compare/v0.2.3...v0.3.0
-[0.2.3]: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/compare/v0.2.2...v0.2.3
-[0.2.2]: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/compare/v0.2.1...v0.2.2
-[0.2.1]: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/compare/v0.2.0...v0.2.1
-[0.2.0]: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/compare/v0.1.1...v0.2.0
-[0.1.1]: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/releases/tag/v0.1.0
+[Unreleased]: https://github.com/Varashi/vsphere-passthrough-node-controller/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/Varashi/vsphere-passthrough-node-controller/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/Varashi/vsphere-passthrough-node-controller/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/Varashi/vsphere-passthrough-node-controller/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/Varashi/vsphere-passthrough-node-controller/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/Varashi/vsphere-passthrough-node-controller/compare/v0.2.3...v0.3.0
+[0.2.3]: https://github.com/Varashi/vsphere-passthrough-node-controller/compare/v0.2.2...v0.2.3
+[0.2.2]: https://github.com/Varashi/vsphere-passthrough-node-controller/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/Varashi/vsphere-passthrough-node-controller/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/Varashi/vsphere-passthrough-node-controller/compare/v0.1.1...v0.2.0
+[0.1.1]: https://github.com/Varashi/vsphere-passthrough-node-controller/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/Varashi/vsphere-passthrough-node-controller/releases/tag/v0.1.0

@@ -1,7 +1,7 @@
-# Default values for gpu-node-vsphere-maintenance-controller.
+# Default values for vsphere-passthrough-node-controller.
 
 image:
-  repository: ghcr.io/varashi/gpu-node-vsphere-maintenance-controller
+  repository: ghcr.io/varashi/vsphere-passthrough-node-controller
   # -- Overrides the image tag (defaults to Chart.appVersion)
   tag: ""
   pullPolicy: IfNotPresent

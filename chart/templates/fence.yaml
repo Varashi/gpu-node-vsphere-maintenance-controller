@@ -1,5 +1,5 @@
 {{- if .Values.fence.enabled }}
-{{- $fullname := include "gpu-node-vsphere-maintenance-controller.fullname" . -}}
+{{- $fullname := include "vsphere-passthrough-node-controller.fullname" . -}}
 {{- $fenceName := printf "%s-fence" $fullname -}}
 {{- $fenceSA := ternary $fenceName (default "default" .Values.serviceAccount.name) .Values.serviceAccount.create -}}
 {{- if and .Values.serviceAccount.create }}
@@ -9,7 +9,7 @@ metadata:
   name: {{ $fenceName }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "gpu-node-vsphere-maintenance-controller.labels" . | nindent 4 }}
+    {{- include "vsphere-passthrough-node-controller.labels" . | nindent 4 }}
     app.kubernetes.io/component: fence
 ---
 {{- end }}
@@ -22,7 +22,7 @@ kind: ClusterRole
 metadata:
   name: {{ $fenceName }}
   labels:
-    {{- include "gpu-node-vsphere-maintenance-controller.labels" . | nindent 4 }}
+    {{- include "vsphere-passthrough-node-controller.labels" . | nindent 4 }}
     app.kubernetes.io/component: fence
 rules:
   - apiGroups: [""]
@@ -34,7 +34,7 @@ kind: ClusterRoleBinding
 metadata:
   name: {{ $fenceName }}
   labels:
-    {{- include "gpu-node-vsphere-maintenance-controller.labels" . | nindent 4 }}
+    {{- include "vsphere-passthrough-node-controller.labels" . | nindent 4 }}
     app.kubernetes.io/component: fence
 roleRef:
   apiGroup: rbac.authorization.k8s.io
@@ -52,7 +52,7 @@ metadata:
   name: {{ $fenceName }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "gpu-node-vsphere-maintenance-controller.labels" . | nindent 4 }}
+    {{- include "vsphere-passthrough-node-controller.labels" . | nindent 4 }}
     app.kubernetes.io/component: fence
 spec:
   replicas: 1
@@ -60,12 +60,12 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      {{- include "gpu-node-vsphere-maintenance-controller.selectorLabels" . | nindent 6 }}
+      {{- include "vsphere-passthrough-node-controller.selectorLabels" . | nindent 6 }}
       app.kubernetes.io/component: fence
   template:
     metadata:
       labels:
-        {{- include "gpu-node-vsphere-maintenance-controller.selectorLabels" . | nindent 8 }}
+        {{- include "vsphere-passthrough-node-controller.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: fence
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
@@ -94,7 +94,7 @@ spec:
           command: ["python", "-u", "fence.py"]
           envFrom:
             - secretRef:
-                name: {{ include "gpu-node-vsphere-maintenance-controller.vcenterSecretName" . }}
+                name: {{ include "vsphere-passthrough-node-controller.vcenterSecretName" . }}
           env:
             - name: FENCE_POLL_SECONDS
               value: {{ .Values.fence.pollSeconds | quote }}
