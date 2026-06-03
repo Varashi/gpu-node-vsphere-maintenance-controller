@@ -90,6 +90,49 @@ Recovery: if a `powered-off` VM ends up on a different host (DRS race,
 operator intervention), the controller notices on the next poll and
 transitions it to `migrated`.
 
+## Crash-fence controller (optional, off by default)
+
+The maintenance controller above handles *planned* host maintenance. A separate,
+optional controller (`fence.py`) handles the *unplanned* case — a host **crash**.
+
+A passthrough-GPU VM can't be vSphere-HA-restarted on another host (the device
+pins it to the original host), so when its host crashes the node stays down. Its
+**RWO volume stays attached to the dead node** and Kubernetes won't auto-detach
+it — it can't distinguish a crash from a network partition, where force-detaching
+a still-live node's volume would corrupt it. So a rescheduled stateful pod hangs
+indefinitely on `Multi-Attach`. The fix is the `node.kubernetes.io/out-of-service`
+taint (non-graceful node shutdown), which force-detaches volumes and force-deletes
+pods — but it must only ever be applied to a node you've *confirmed* is dead.
+
+The fence controller provides that confirmation by requiring **two gates**,
+sustained for `fence.graceSeconds`:
+
+1. **k8s** — node `NotReady`, and
+2. **vCenter** — that node's VM `runtime.connectionState` is `disconnected`
+   (or `inaccessible`/`orphaned`). A host crash makes its VMs `disconnected`; a
+   clean (maintenance) power-off keeps them `connected` — so this signal is
+   **disjoint from the maintenance controller** and the two never collide.
+
+On recovery (VM `connected` + node `Ready`) the taint is removed. The controller
+does **taint/un-taint only** — power-on is left to vSphere HA (which restarts a
+passthrough VM on the original host once it reconnects), and eviction is handled
+by `tolerationSeconds` + the taint.
+
+Enable it (and start with `dryRun` to watch its decisions):
+
+```yaml
+fence:
+  enabled: true
+  dryRun: true        # logs "would fence" without tainting; flip to false when confident
+  graceSeconds: 60    # both gates must hold this long before fencing
+  pollSeconds: 20
+```
+
+It runs as its own Deployment with its own ServiceAccount, a least-privilege
+ClusterRole (`nodes` get/list/watch/patch only — no pods/eviction), and an
+independent kill switch (`fence.enabled`). It's **off by default** because a
+mis-fire is destructive; turn it on once you trust the signal in your environment.
+
 ## Requirements
 
 - Kubernetes 1.26+ (eviction API, server-side apply)

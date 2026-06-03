@@ -53,6 +53,30 @@ config:
   gpuNodeLabel: "intel.feature.node.kubernetes.io/gpu=true"
   dryRun: false
 
+# Crash-fence controller — a SEPARATE Deployment (own RBAC + kill switch) that
+# shares this image. Applies the `node.kubernetes.io/out-of-service` taint to a
+# GPU node confirmed dead by BOTH k8s (NotReady) and vCenter (VM
+# connectionState disconnected/inaccessible/orphaned), sustained graceSeconds,
+# so RWO volumes force-detach and stateful pods reschedule; removes it on
+# recovery (VM connected + node Ready). Disjoint from maintenance (which keys
+# off maintenance-mode tasks and leaves a clean power-off 'connected'), so the
+# two never collide. Power-on stays with vSphere HA.
+#
+# OFF by default — fencing is the most destructive action in the cluster (a
+# mis-fire force-detaches a live/partitioned node's volume → corruption).
+# Enable explicitly once you trust the signal.
+fence:
+  enabled: false
+  pollSeconds: 20
+  graceSeconds: 60
+  dryRun: false
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
+
 serviceAccount:
   create: true
   name: ""

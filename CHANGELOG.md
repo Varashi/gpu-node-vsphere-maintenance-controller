@@ -7,6 +7,29 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-06-03
+
+### Added
+- **Crash-fence controller** (`fence.py`) — a second, optional Deployment
+  (`fence.enabled`, **off by default**) that shares this image and reuses the
+  vCenter client + node↔VM mapping. It automates non-graceful node shutdown for
+  passthrough-GPU workers that vSphere HA can't restart elsewhere during a host
+  crash: it applies the `node.kubernetes.io/out-of-service` taint to a node
+  confirmed dead by **both** gates — k8s `NotReady` **and** vCenter VM
+  `runtime.connectionState` in `{disconnected, inaccessible, orphaned}` —
+  sustained for `fence.graceSeconds`, so RWO volumes force-detach and stateful
+  pods reschedule. The taint is removed on recovery (VM `connected` + node
+  `Ready`).
+  - **Disjoint from the maintenance controller**: a clean (maintenance)
+    power-off leaves the VM `connected`; only a real host loss makes it
+    `disconnected`. The two controllers trigger on different vCenter facts and
+    never collide — no coordination contract needed.
+  - **Taint/un-taint only.** Power-on is owned by vSphere HA (it restarts
+    passthrough VMs on the original host once it returns); eviction is handled
+    by `tolerationSeconds` + the taint.
+  - Own ServiceAccount + least-privilege ClusterRole (`nodes` get/list/watch/
+    patch only) + kill switch (`fence.enabled`) + independent `fence.dryRun`.
+
 ## [0.4.4] — 2026-05-01
 
 ### Fixed

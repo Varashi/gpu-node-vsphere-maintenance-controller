@@ -11,6 +11,8 @@ WORKDIR /app
 RUN pip install --no-cache-dir --disable-pip-version-check \
       pyVmomi==8.0.3.0.1 kubernetes==31.0.0
 
-COPY controller.py .
+COPY controller.py fence.py .
 
+# Default entrypoint = maintenance controller. The fence controller (fence.py)
+# is the same image with the command overridden to `python -u fence.py`.
 CMD ["python", "-u", "controller.py"]

@@ -73,6 +73,13 @@ STATE_DRAINING = "draining"
 STATE_POWERED_OFF = "powered-off"
 STATE_MIGRATED = "migrated"
 
+# Non-graceful node shutdown (used by the separate fence controller, fence.py).
+OUT_OF_SERVICE_TAINT_KEY = "node.kubernetes.io/out-of-service"
+OUT_OF_SERVICE_TAINT_VALUE = "nodeshutdown"
+# vm.runtime.connectionState values meaning the host managing the VM is gone
+# (a crash). A clean maintenance power-off leaves the VM 'connected'.
+VM_DEAD_CONNECTION_STATES = {"disconnected", "inaccessible", "orphaned"}
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 
 logging.basicConfig(
@@ -270,6 +277,17 @@ class VSphereClient:
             return vm.runtime.host.name
         return None
 
+    def get_vm_connection_state(self, vm_name: str) -> str:
+        """vm.runtime.connectionState — 'connected' | 'disconnected' |
+        'inaccessible' | 'orphaned' | 'invalid'. Returns 'notfound' if the VM
+        is not in inventory. A crashed host makes its VMs 'disconnected'; a
+        clean (maintenance) power-off keeps them 'connected'."""
+        self._ensure_connected()
+        vm = self._find_vm(vm_name)
+        if vm is None:
+            return "notfound"
+        return str(vm.runtime.connectionState)
+
     def relocate_vm(self, vm_name: str, target_host_name: str):
         """Cold migrate a powered-off VM to the target ESXi host."""
         self._ensure_connected()
@@ -462,6 +480,49 @@ class K8sClient:
             return
         log.info(f"Uncordoning {node_name}")
         self.core.patch_node(node_name, {"spec": {"unschedulable": False}})
+
+    def has_out_of_service_taint(self, node_name) -> bool:
+        node = self.get_node(node_name)
+        return any(
+            t.key == OUT_OF_SERVICE_TAINT_KEY for t in (node.spec.taints or [])
+        )
+
+    def _patch_taints(self, node_name, taints):
+        # sanitize_for_serialization turns V1Taint objects into proper camelCase
+        # API dicts (incl. timeAdded), so existing taints are preserved verbatim.
+        body = {"spec": {"taints": self.core.api_client.sanitize_for_serialization(taints)}}
+        self.core.patch_node(node_name, body)
+
+    def apply_out_of_service_taint(self, node_name):
+        """Force-detach volumes + force-delete pods on a confirmed-dead node."""
+        node = self.get_node(node_name)
+        taints = list(node.spec.taints or [])
+        if any(t.key == OUT_OF_SERVICE_TAINT_KEY for t in taints):
+            return  # already fenced
+        if DRY_RUN:
+            log.warning(f"[DRY RUN] Would FENCE {node_name} (out-of-service taint)")
+            return
+        log.warning(f"FENCING {node_name}: applying {OUT_OF_SERVICE_TAINT_KEY} taint")
+        taints.append(
+            k8s_client.V1Taint(
+                key=OUT_OF_SERVICE_TAINT_KEY,
+                value=OUT_OF_SERVICE_TAINT_VALUE,
+                effect="NoExecute",
+            )
+        )
+        self._patch_taints(node_name, taints)
+
+    def remove_out_of_service_taint(self, node_name):
+        node = self.get_node(node_name)
+        taints = list(node.spec.taints or [])
+        if not any(t.key == OUT_OF_SERVICE_TAINT_KEY for t in taints):
+            return
+        if DRY_RUN:
+            log.info(f"[DRY RUN] Would un-fence {node_name} (remove out-of-service taint)")
+            return
+        log.info(f"Un-fencing {node_name}: removing {OUT_OF_SERVICE_TAINT_KEY} taint")
+        kept = [t for t in taints if t.key != OUT_OF_SERVICE_TAINT_KEY]
+        self._patch_taints(node_name, kept)
 
     def is_ready(self, node_name):
         node = self.get_node(node_name)
