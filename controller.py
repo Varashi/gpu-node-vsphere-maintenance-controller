@@ -76,6 +76,7 @@ STATE_MIGRATED = "migrated"
 # Non-graceful node shutdown (used by the separate fence controller, fence.py).
 OUT_OF_SERVICE_TAINT_KEY = "node.kubernetes.io/out-of-service"
 OUT_OF_SERVICE_TAINT_VALUE = "nodeshutdown"
+OUT_OF_SERVICE_TAINT_EFFECT = "NoExecute"
 # vm.runtime.connectionState values meaning the host managing the VM is gone
 # (a crash). A clean maintenance power-off leaves the VM 'connected'.
 VM_DEAD_CONNECTION_STATES = {"disconnected", "inaccessible", "orphaned"}
@@ -481,9 +482,20 @@ class K8sClient:
         log.info(f"Uncordoning {node_name}")
         self.core.patch_node(node_name, {"spec": {"unschedulable": False}})
 
+    @staticmethod
+    def _is_out_of_service_taint(t) -> bool:
+        # Match the full (key, value, effect) identity of the taint THIS
+        # controller applies. A same-key taint with a different value/effect is
+        # not ours: don't treat the node as fenced, and never strip it on un-fence.
+        return (
+            t.key == OUT_OF_SERVICE_TAINT_KEY
+            and t.value == OUT_OF_SERVICE_TAINT_VALUE
+            and t.effect == OUT_OF_SERVICE_TAINT_EFFECT
+        )
+
     def has_out_of_service_taint(self, node_name) -> bool:
         node = self.get_node(node_name)
-        return any(t.key == OUT_OF_SERVICE_TAINT_KEY for t in (node.spec.taints or []))
+        return any(self._is_out_of_service_taint(t) for t in (node.spec.taints or []))
 
     def _patch_taints(self, node_name, taints):
         # sanitize_for_serialization turns V1Taint objects into proper camelCase
@@ -497,7 +509,7 @@ class K8sClient:
         """Force-detach volumes + force-delete pods on a confirmed-dead node."""
         node = self.get_node(node_name)
         taints = list(node.spec.taints or [])
-        if any(t.key == OUT_OF_SERVICE_TAINT_KEY for t in taints):
+        if any(self._is_out_of_service_taint(t) for t in taints):
             return  # already fenced
         if DRY_RUN:
             log.warning(f"[DRY RUN] Would FENCE {node_name} (out-of-service taint)")
@@ -507,7 +519,7 @@ class K8sClient:
             k8s_client.V1Taint(
                 key=OUT_OF_SERVICE_TAINT_KEY,
                 value=OUT_OF_SERVICE_TAINT_VALUE,
-                effect="NoExecute",
+                effect=OUT_OF_SERVICE_TAINT_EFFECT,
             )
         )
         self._patch_taints(node_name, taints)
@@ -515,7 +527,7 @@ class K8sClient:
     def remove_out_of_service_taint(self, node_name):
         node = self.get_node(node_name)
         taints = list(node.spec.taints or [])
-        if not any(t.key == OUT_OF_SERVICE_TAINT_KEY for t in taints):
+        if not any(self._is_out_of_service_taint(t) for t in taints):
             return
         if DRY_RUN:
             log.info(
@@ -523,7 +535,7 @@ class K8sClient:
             )
             return
         log.info(f"Un-fencing {node_name}: removing {OUT_OF_SERVICE_TAINT_KEY} taint")
-        kept = [t for t in taints if t.key != OUT_OF_SERVICE_TAINT_KEY]
+        kept = [t for t in taints if not self._is_out_of_service_taint(t)]
         self._patch_taints(node_name, kept)
 
     def is_ready(self, node_name):

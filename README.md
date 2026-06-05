@@ -151,7 +151,7 @@ The chart is published as an OCI artifact alongside the image:
 ```bash
 helm upgrade --install vsphere-passthrough-node \
   oci://ghcr.io/varashi/charts/vsphere-passthrough-node-controller \
-  --version 0.4.3 \
+  --version 0.5.0 \
   --namespace vsphere-passthrough-node --create-namespace \
   --set vcenter.host=vcenter.example.com \
   --set vcenter.user=maintenance-controller@vsphere.local \
@@ -176,7 +176,7 @@ spec:
   interval: 1h
   url: oci://ghcr.io/varashi/charts/vsphere-passthrough-node-controller
   ref:
-    tag: 0.4.3
+    tag: 0.5.0
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
@@ -397,9 +397,11 @@ docker build -t ghcr.io/you/vsphere-passthrough-node-controller:dev .
 docker push  ghcr.io/you/vsphere-passthrough-node-controller:dev
 ```
 
-Source layout is deliberately tiny — a single `controller.py` plus a
-minimal Python 3.13 Dockerfile. Dependencies: `pyVmomi` and the official
-Kubernetes Python client.
+Source layout is deliberately tiny — `controller.py` (maintenance-mode
+controller) plus the optional `fence.py` (crash-fence controller, which
+reuses `controller.py`'s vCenter client and node↔VM mapping), on a minimal
+Python 3.13 Dockerfile. Dependencies: `pyVmomi` and the official Kubernetes
+Python client.
 
 ## Race conditions handled
 
