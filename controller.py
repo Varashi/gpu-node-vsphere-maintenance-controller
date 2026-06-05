@@ -483,14 +483,14 @@ class K8sClient:
 
     def has_out_of_service_taint(self, node_name) -> bool:
         node = self.get_node(node_name)
-        return any(
-            t.key == OUT_OF_SERVICE_TAINT_KEY for t in (node.spec.taints or [])
-        )
+        return any(t.key == OUT_OF_SERVICE_TAINT_KEY for t in (node.spec.taints or []))
 
     def _patch_taints(self, node_name, taints):
         # sanitize_for_serialization turns V1Taint objects into proper camelCase
         # API dicts (incl. timeAdded), so existing taints are preserved verbatim.
-        body = {"spec": {"taints": self.core.api_client.sanitize_for_serialization(taints)}}
+        body = {
+            "spec": {"taints": self.core.api_client.sanitize_for_serialization(taints)}
+        }
         self.core.patch_node(node_name, body)
 
     def apply_out_of_service_taint(self, node_name):
@@ -518,7 +518,9 @@ class K8sClient:
         if not any(t.key == OUT_OF_SERVICE_TAINT_KEY for t in taints):
             return
         if DRY_RUN:
-            log.info(f"[DRY RUN] Would un-fence {node_name} (remove out-of-service taint)")
+            log.info(
+                f"[DRY RUN] Would un-fence {node_name} (remove out-of-service taint)"
+            )
             return
         log.info(f"Un-fencing {node_name}: removing {OUT_OF_SERVICE_TAINT_KEY} taint")
         kept = [t for t in taints if t.key != OUT_OF_SERVICE_TAINT_KEY]
