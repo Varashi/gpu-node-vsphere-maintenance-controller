@@ -148,7 +148,7 @@ jobs:
         run: |
           version="${{ steps.ver.outputs.version }}"
           # helm push prints "Digest: sha256:..." to stderr; tee to capture.
-          helm push "gpu-node-vsphere-maintenance-controller-${version}.tgz" \
+          helm push "vsphere-passthrough-node-controller-${version}.tgz" \
             "oci://${{ env.CHART_REPO }}" 2>&1 | tee push.log
           digest=$(awk '/^Digest: /{print $2}' push.log)
           if [ -z "$digest" ]; then
@@ -160,7 +160,7 @@ jobs:
       - name: Cosign keyless sign (chart)
         env:
           DIGEST: ${{ steps.chart_push.outputs.digest }}
-          CHART_REF: ${{ env.CHART_REPO }}/gpu-node-vsphere-maintenance-controller
+          CHART_REF: ${{ env.CHART_REPO }}/vsphere-passthrough-node-controller
         run: cosign sign --yes "${CHART_REF}@${DIGEST}"
 
       - name: Create GitHub Release
@@ -173,4 +173,4 @@ jobs:
           prerelease: false
           files: |
             sbom.spdx.json
-            gpu-node-vsphere-maintenance-controller-${{ steps.ver.outputs.version }}.tgz
+            vsphere-passthrough-node-controller-${{ steps.ver.outputs.version }}.tgz

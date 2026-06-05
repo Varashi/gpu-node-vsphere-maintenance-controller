@@ -1,0 +1,154 @@
+{{- if .Values.fence.enabled }}
+{{- $fullname := include "vsphere-passthrough-node-controller.fullname" . -}}
+{{- $fenceName := printf "%s-fence" $fullname -}}
+{{- $fenceSA := ternary $fenceName (default "default" .Values.serviceAccount.name) .Values.serviceAccount.create -}}
+{{- if .Values.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $fenceName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vsphere-passthrough-node-controller.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fence
+---
+{{- end }}
+{{- if .Values.rbac.create }}
+# Least-privilege: the fence controller only reads node state and patches the
+# out-of-service taint. No pods/eviction (vSphere HA + tolerationSeconds handle
+# eviction once the taint lands).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $fenceName }}
+  labels:
+    {{- include "vsphere-passthrough-node-controller.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fence
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $fenceName }}
+  labels:
+    {{- include "vsphere-passthrough-node-controller.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fence
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $fenceName }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $fenceSA }}
+    namespace: {{ .Release.Namespace }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $fenceName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vsphere-passthrough-node-controller.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fence
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "vsphere-passthrough-node-controller.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: fence
+  template:
+    metadata:
+      labels:
+        {{- include "vsphere-passthrough-node-controller.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: fence
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ $fenceSA }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: fence
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-u", "fence.py"]
+          envFrom:
+            - secretRef:
+                name: {{ include "vsphere-passthrough-node-controller.vcenterSecretName" . }}
+          env:
+            - name: FENCE_POLL_SECONDS
+              value: {{ .Values.fence.pollSeconds | quote }}
+            - name: FENCE_GRACE_SECONDS
+              value: {{ .Values.fence.graceSeconds | quote }}
+            - name: DRY_RUN
+              value: {{ .Values.fence.dryRun | quote }}
+            - name: GPU_NODE_LABEL
+              value: {{ .Values.config.gpuNodeLabel | quote }}
+            - name: VCENTER_TLS_VERIFY
+              value: {{ .Values.vcenter.tlsVerify | quote }}
+            {{- if .Values.vcenter.caBundle.configMapName }}
+            - name: VCENTER_CA_BUNDLE
+              value: {{ printf "%s/%s" .Values.vcenter.caBundle.mountPath .Values.vcenter.caBundle.key | quote }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if or .Values.vcenter.caBundle.configMapName .Values.extraVolumeMounts }}
+          volumeMounts:
+            {{- if .Values.vcenter.caBundle.configMapName }}
+            - name: vcenter-ca
+              mountPath: {{ .Values.vcenter.caBundle.mountPath }}
+              readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.fence.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+      {{- if or .Values.vcenter.caBundle.configMapName .Values.extraVolumes }}
+      volumes:
+        {{- if .Values.vcenter.caBundle.configMapName }}
+        - name: vcenter-ca
+          configMap:
+            name: {{ .Values.vcenter.caBundle.configMapName }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

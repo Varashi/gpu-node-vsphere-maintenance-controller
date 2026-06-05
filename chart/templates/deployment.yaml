@@ -1,21 +1,21 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "gpu-node-vsphere-maintenance-controller.fullname" . }}
+  name: {{ include "vsphere-passthrough-node-controller.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "gpu-node-vsphere-maintenance-controller.labels" . | nindent 4 }}
+    {{- include "vsphere-passthrough-node-controller.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
   strategy:
     {{- toYaml .Values.strategy | nindent 4 }}
   selector:
     matchLabels:
-      {{- include "gpu-node-vsphere-maintenance-controller.selectorLabels" . | nindent 6 }}
+      {{- include "vsphere-passthrough-node-controller.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "gpu-node-vsphere-maintenance-controller.selectorLabels" . | nindent 8 }}
+        {{- include "vsphere-passthrough-node-controller.selectorLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -25,7 +25,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
-      serviceAccountName: {{ include "gpu-node-vsphere-maintenance-controller.serviceAccountName" . }}
+      serviceAccountName: {{ include "vsphere-passthrough-node-controller.serviceAccountName" . }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -43,9 +43,9 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           envFrom:
             - secretRef:
-                name: {{ include "gpu-node-vsphere-maintenance-controller.vcenterSecretName" . }}
+                name: {{ include "vsphere-passthrough-node-controller.vcenterSecretName" . }}
             - configMapRef:
-                name: {{ include "gpu-node-vsphere-maintenance-controller.fullname" . }}
+                name: {{ include "vsphere-passthrough-node-controller.fullname" . }}
           {{- with .Values.extraEnv }}
           env:
             {{- toYaml . | nindent 12 }}

@@ -1,14 +1,14 @@
 {{/*
 Expand the name of the chart.
 */}}
-{{- define "gpu-node-vsphere-maintenance-controller.name" -}}
+{{- define "vsphere-passthrough-node-controller.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Create a default fully qualified app name.
 */}}
-{{- define "gpu-node-vsphere-maintenance-controller.fullname" -}}
+{{- define "vsphere-passthrough-node-controller.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -24,16 +24,16 @@ Create a default fully qualified app name.
 {{/*
 Chart label.
 */}}
-{{- define "gpu-node-vsphere-maintenance-controller.chart" -}}
+{{- define "vsphere-passthrough-node-controller.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/*
 Common labels.
 */}}
-{{- define "gpu-node-vsphere-maintenance-controller.labels" -}}
-helm.sh/chart: {{ include "gpu-node-vsphere-maintenance-controller.chart" . }}
-{{ include "gpu-node-vsphere-maintenance-controller.selectorLabels" . }}
+{{- define "vsphere-passthrough-node-controller.labels" -}}
+helm.sh/chart: {{ include "vsphere-passthrough-node-controller.chart" . }}
+{{ include "vsphere-passthrough-node-controller.selectorLabels" . }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
@@ -43,17 +43,17 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{/*
 Selector labels.
 */}}
-{{- define "gpu-node-vsphere-maintenance-controller.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "gpu-node-vsphere-maintenance-controller.name" . }}
+{{- define "vsphere-passthrough-node-controller.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "vsphere-passthrough-node-controller.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
 ServiceAccount name.
 */}}
-{{- define "gpu-node-vsphere-maintenance-controller.serviceAccountName" -}}
+{{- define "vsphere-passthrough-node-controller.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create }}
-{{- default (include "gpu-node-vsphere-maintenance-controller.fullname" .) .Values.serviceAccount.name }}
+{{- default (include "vsphere-passthrough-node-controller.fullname" .) .Values.serviceAccount.name }}
 {{- else }}
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
@@ -62,10 +62,10 @@ ServiceAccount name.
 {{/*
 Name of the Secret holding vCenter credentials (existing or rendered).
 */}}
-{{- define "gpu-node-vsphere-maintenance-controller.vcenterSecretName" -}}
+{{- define "vsphere-passthrough-node-controller.vcenterSecretName" -}}
 {{- if .Values.vcenter.existingSecret -}}
 {{- .Values.vcenter.existingSecret -}}
 {{- else -}}
-{{- printf "%s-vcenter" (include "gpu-node-vsphere-maintenance-controller.fullname" .) -}}
+{{- printf "%s-vcenter" (include "vsphere-passthrough-node-controller.fullname" .) -}}
 {{- end -}}
 {{- end }}

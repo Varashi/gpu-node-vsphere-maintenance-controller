@@ -1,13 +1,13 @@
 apiVersion: v2
-name: gpu-node-vsphere-maintenance-controller
+name: vsphere-passthrough-node-controller
 description: |
   Kubernetes controller that automates ESXi maintenance mode for worker
   nodes with PCI passthrough (GPU or otherwise). Detects EnterMaintenanceMode
   on ESXi hosts, drains the matching Kubernetes nodes, powers off the VMs,
   migrates them to a free GPU host if possible, and returns them to service.
 type: application
-version: 0.4.4
-appVersion: "0.4.4"
+version: 0.5.0
+appVersion: "0.5.0"
 kubeVersion: ">=1.26.0-0"
 keywords:
   - vsphere
@@ -16,14 +16,14 @@ keywords:
   - gpu
   - pci-passthrough
   - kubernetes
-home: https://github.com/Varashi/gpu-node-vsphere-maintenance-controller
+home: https://github.com/Varashi/vsphere-passthrough-node-controller
 sources:
-  - https://github.com/Varashi/gpu-node-vsphere-maintenance-controller
+  - https://github.com/Varashi/vsphere-passthrough-node-controller
 maintainers:
   - name: Varashi
     url: https://github.com/Varashi
 annotations:
   artifacthub.io/license: MIT
   artifacthub.io/changes: |
-    - kind: fixed
-      description: Tolerate vCLS VMs vanishing mid-enumeration during host maintenance entry.
+    - kind: added
+      description: Optional crash-fence controller (separate Deployment, off by default) — applies the out-of-service taint to a GPU node confirmed dead by both k8s (NotReady) and vCenter (VM disconnected) so RWO volumes force-detach and stateful pods reschedule.

@@ -1,4 +1,4 @@
-# gpu-node-vsphere-maintenance-controller
+# vsphere-passthrough-node-controller
 
 A Kubernetes controller that safely handles ESXi maintenance mode transitions
 for worker nodes that use **PCI passthrough** (Intel ARC / NVIDIA / any
@@ -12,7 +12,7 @@ possible — migrates it (cold) to another GPU-capable host and brings it back
 online. When the original host exits maintenance, a powered-off node is
 returned to service automatically.
 
-Image: `ghcr.io/varashi/gpu-node-vsphere-maintenance-controller` (public).
+Image: `ghcr.io/varashi/vsphere-passthrough-node-controller` (public).
 
 ## Why this exists
 
@@ -90,6 +90,49 @@ Recovery: if a `powered-off` VM ends up on a different host (DRS race,
 operator intervention), the controller notices on the next poll and
 transitions it to `migrated`.
 
+## Crash-fence controller (optional, off by default)
+
+The maintenance controller above handles *planned* host maintenance. A separate,
+optional controller (`fence.py`) handles the *unplanned* case — a host **crash**.
+
+A passthrough-GPU VM can't be vSphere-HA-restarted on another host (the device
+pins it to the original host), so when its host crashes the node stays down. Its
+**RWO volume stays attached to the dead node** and Kubernetes won't auto-detach
+it — it can't distinguish a crash from a network partition, where force-detaching
+a still-live node's volume would corrupt it. So a rescheduled stateful pod hangs
+indefinitely on `Multi-Attach`. The fix is the `node.kubernetes.io/out-of-service`
+taint (non-graceful node shutdown), which force-detaches volumes and force-deletes
+pods — but it must only ever be applied to a node you've *confirmed* is dead.
+
+The fence controller provides that confirmation by requiring **two gates**,
+sustained for `fence.graceSeconds`:
+
+1. **k8s** — node `NotReady`, and
+2. **vCenter** — that node's VM `runtime.connectionState` is `disconnected`
+   (or `inaccessible`/`orphaned`). A host crash makes its VMs `disconnected`; a
+   clean (maintenance) power-off keeps them `connected` — so this signal is
+   **disjoint from the maintenance controller** and the two never collide.
+
+On recovery (VM `connected` + node `Ready`) the taint is removed. The controller
+does **taint/un-taint only** — power-on is left to vSphere HA (which restarts a
+passthrough VM on the original host once it reconnects), and eviction is handled
+by `tolerationSeconds` + the taint.
+
+Enable it (and start with `dryRun` to watch its decisions):
+
+```yaml
+fence:
+  enabled: true
+  dryRun: true        # logs "would fence" without tainting; flip to false when confident
+  graceSeconds: 60    # both gates must hold this long before fencing
+  pollSeconds: 20
+```
+
+It runs as its own Deployment with its own ServiceAccount, a least-privilege
+ClusterRole (`nodes` get/list/watch/patch only — no pods/eviction), and an
+independent kill switch (`fence.enabled`). It's **off by default** because a
+mis-fire is destructive; turn it on once you trust the signal in your environment.
+
 ## Requirements
 
 - Kubernetes 1.26+ (eviction API, server-side apply)
@@ -106,10 +149,10 @@ transitions it to `migrated`.
 The chart is published as an OCI artifact alongside the image:
 
 ```bash
-helm upgrade --install gpu-node-vsphere-maintenance \
-  oci://ghcr.io/varashi/charts/gpu-node-vsphere-maintenance-controller \
-  --version 0.4.3 \
-  --namespace gpu-node-vsphere-maintenance --create-namespace \
+helm upgrade --install vsphere-passthrough-node \
+  oci://ghcr.io/varashi/charts/vsphere-passthrough-node-controller \
+  --version 0.5.0 \
+  --namespace vsphere-passthrough-node --create-namespace \
   --set vcenter.host=vcenter.example.com \
   --set vcenter.user=maintenance-controller@vsphere.local \
   --set vcenter.password='replace-me'
@@ -127,24 +170,24 @@ A Flux `HelmRelease` example:
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: OCIRepository
 metadata:
-  name: gpu-node-vsphere-maintenance-controller
-  namespace: gpu-node-vsphere-maintenance
+  name: vsphere-passthrough-node-controller
+  namespace: vsphere-passthrough-node
 spec:
   interval: 1h
-  url: oci://ghcr.io/varashi/charts/gpu-node-vsphere-maintenance-controller
+  url: oci://ghcr.io/varashi/charts/vsphere-passthrough-node-controller
   ref:
-    tag: 0.4.3
+    tag: 0.5.0
 ---
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
-  name: gpu-node-vsphere-maintenance-controller
-  namespace: gpu-node-vsphere-maintenance
+  name: vsphere-passthrough-node-controller
+  namespace: vsphere-passthrough-node
 spec:
   interval: 1h
   chartRef:
     kind: OCIRepository
-    name: gpu-node-vsphere-maintenance-controller
+    name: vsphere-passthrough-node-controller
   values:
     vcenter:
       existingSecret: vsphere-credentials
@@ -163,18 +206,18 @@ and credentials source as needed):
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: gpu-node-vsphere-maintenance
+  name: vsphere-passthrough-node
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: gpu-node-vsphere-maintenance
-  namespace: gpu-node-vsphere-maintenance
+  name: vsphere-passthrough-node
+  namespace: vsphere-passthrough-node
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: gpu-node-vsphere-maintenance
+  name: vsphere-passthrough-node
 rules:
   - apiGroups: [""]
     resources: ["nodes"]
@@ -189,21 +232,21 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: gpu-node-vsphere-maintenance
+  name: vsphere-passthrough-node
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: gpu-node-vsphere-maintenance
+  name: vsphere-passthrough-node
 subjects:
   - kind: ServiceAccount
-    name: gpu-node-vsphere-maintenance
-    namespace: gpu-node-vsphere-maintenance
+    name: vsphere-passthrough-node
+    namespace: vsphere-passthrough-node
 ---
 apiVersion: v1
 kind: Secret
 metadata:
   name: vsphere-credentials
-  namespace: gpu-node-vsphere-maintenance
+  namespace: vsphere-passthrough-node
 type: Opaque
 stringData:
   VCENTER_HOST: vcenter.example.com
@@ -214,7 +257,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: controller-config
-  namespace: gpu-node-vsphere-maintenance
+  namespace: vsphere-passthrough-node
 data:
   POLL_INTERVAL_SECONDS: "30"
   DRAIN_TIMEOUT_SECONDS: "600"
@@ -227,24 +270,24 @@ data:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: gpu-node-vsphere-maintenance
-  namespace: gpu-node-vsphere-maintenance
+  name: vsphere-passthrough-node
+  namespace: vsphere-passthrough-node
 spec:
   replicas: 1
   strategy:
     type: Recreate
   selector:
     matchLabels:
-      app: gpu-node-vsphere-maintenance
+      app: vsphere-passthrough-node
   template:
     metadata:
       labels:
-        app: gpu-node-vsphere-maintenance
+        app: vsphere-passthrough-node
     spec:
-      serviceAccountName: gpu-node-vsphere-maintenance
+      serviceAccountName: vsphere-passthrough-node
       containers:
         - name: controller
-          image: ghcr.io/varashi/gpu-node-vsphere-maintenance-controller:v0.3.0
+          image: ghcr.io/varashi/vsphere-passthrough-node-controller:v0.3.0
           envFrom:
             - secretRef:
                 name: vsphere-credentials
@@ -287,7 +330,7 @@ apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
   name: vsphere-credentials
-  namespace: gpu-node-vsphere-maintenance
+  namespace: vsphere-passthrough-node
 spec:
   refreshInterval: 1h
   secretStoreRef:
@@ -350,13 +393,15 @@ are set.
 ## Building from source
 
 ```bash
-docker build -t ghcr.io/you/gpu-node-vsphere-maintenance-controller:dev .
-docker push  ghcr.io/you/gpu-node-vsphere-maintenance-controller:dev
+docker build -t ghcr.io/you/vsphere-passthrough-node-controller:dev .
+docker push  ghcr.io/you/vsphere-passthrough-node-controller:dev
 ```
 
-Source layout is deliberately tiny — a single `controller.py` plus a
-minimal Python 3.13 Dockerfile. Dependencies: `pyVmomi` and the official
-Kubernetes Python client.
+Source layout is deliberately tiny — `controller.py` (maintenance-mode
+controller) plus the optional `fence.py` (crash-fence controller, which
+reuses `controller.py`'s vCenter client and node↔VM mapping), on a minimal
+Python 3.13 Dockerfile. Dependencies: `pyVmomi` and the official Kubernetes
+Python client.
 
 ## Race conditions handled
 
@@ -401,12 +446,12 @@ git push origin v0.3.1
 The `release.yaml` GitHub Actions workflow then:
 
 1. Builds and pushes the controller image to
-   `ghcr.io/varashi/gpu-node-vsphere-maintenance-controller`, multi-arch
+   `ghcr.io/varashi/vsphere-passthrough-node-controller`, multi-arch
    (`linux/amd64`, `linux/arm64`), with cosign keyless signatures (GitHub
    OIDC), an SPDX SBOM, and a build-provenance attestation.
 2. Packages the Helm chart in `chart/` with `version` and `appVersion`
    matching the tag and pushes it to
-   `oci://ghcr.io/varashi/charts/gpu-node-vsphere-maintenance-controller`.
+   `oci://ghcr.io/varashi/charts/vsphere-passthrough-node-controller`.
 3. Creates a GitHub Release whose body is extracted from the matching
    section of [`CHANGELOG.md`](./CHANGELOG.md) and attaches the SBOM and
    the packaged chart `.tgz`.
@@ -420,19 +465,19 @@ attached as a cosign attestation. Verify any of these before deploying:
 ```bash
 # 1. Image signature.
 cosign verify \
-  --certificate-identity-regexp 'https://github\.com/Varashi/gpu-node-vsphere-maintenance-controller/\.github/workflows/release\.yaml@refs/tags/v.*' \
+  --certificate-identity-regexp 'https://github\.com/Varashi/vsphere-passthrough-node-controller/\.github/workflows/release\.yaml@refs/tags/v.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/varashi/gpu-node-vsphere-maintenance-controller:<tag>
+  ghcr.io/varashi/vsphere-passthrough-node-controller:<tag>
 
 # 2. SBOM attestation (SPDX).
 cosign verify-attestation --type spdxjson \
-  --certificate-identity-regexp 'https://github\.com/Varashi/gpu-node-vsphere-maintenance-controller/\.github/workflows/release\.yaml@refs/tags/v.*' \
+  --certificate-identity-regexp 'https://github\.com/Varashi/vsphere-passthrough-node-controller/\.github/workflows/release\.yaml@refs/tags/v.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/varashi/gpu-node-vsphere-maintenance-controller:<tag>
+  ghcr.io/varashi/vsphere-passthrough-node-controller:<tag>
 
 # 3. SLSA build provenance (GitHub Attestations).
 gh attestation verify \
-  oci://ghcr.io/varashi/gpu-node-vsphere-maintenance-controller:<tag> \
+  oci://ghcr.io/varashi/vsphere-passthrough-node-controller:<tag> \
   --owner Varashi
 ```
 
@@ -441,9 +486,9 @@ chart digests too:
 
 ```bash
 cosign verify \
-  --certificate-identity-regexp 'https://github\.com/Varashi/gpu-node-vsphere-maintenance-controller/\.github/workflows/release\.yaml@refs/tags/v.*' \
+  --certificate-identity-regexp 'https://github\.com/Varashi/vsphere-passthrough-node-controller/\.github/workflows/release\.yaml@refs/tags/v.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/varashi/charts/gpu-node-vsphere-maintenance-controller:<tag>
+  ghcr.io/varashi/charts/vsphere-passthrough-node-controller:<tag>
 ```
 
 `helm pull --verify` is *not* supported against this chart: `--verify`
@@ -454,7 +499,7 @@ above instead.
 ## Version history
 
 See [`CHANGELOG.md`](./CHANGELOG.md) for the full history. Released tags
-are also listed on the [GitHub Releases](https://github.com/Varashi/gpu-node-vsphere-maintenance-controller/releases)
+are also listed on the [GitHub Releases](https://github.com/Varashi/vsphere-passthrough-node-controller/releases)
 page with signed assets and SBOMs.
 
 ## License

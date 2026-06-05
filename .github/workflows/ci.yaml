@@ -75,4 +75,4 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: false
-          tags: ci/gpu-node-vsphere-maintenance-controller:ci
+          tags: ci/vsphere-passthrough-node-controller:ci

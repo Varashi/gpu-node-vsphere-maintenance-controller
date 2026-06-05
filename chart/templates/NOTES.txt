@@ -20,8 +20,8 @@ Note: vCenter TLS verification is DISABLED. To enable, pick one:
 
 Verify the controller is running:
 
-  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "gpu-node-vsphere-maintenance-controller.fullname" . }}
-  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "gpu-node-vsphere-maintenance-controller.fullname" . }} -f
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "vsphere-passthrough-node-controller.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "vsphere-passthrough-node-controller.fullname" . }} -f
 
 GPU-worker Node label (`{{ .Values.config.gpuNodeLabel }}`) identifies the
 nodes this controller will drain when their ESXi host enters maintenance.
